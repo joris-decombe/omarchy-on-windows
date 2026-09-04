@@ -93,7 +93,7 @@ Useful switches: `-Name`, `-ProcessorCount`, `-MemoryGB`, `-DiskGB`,
 Inside Omarchy:
 
 ```bash
-git clone https://github.com/<you>/omarchy-on-windows.git
+git clone https://github.com/joris-decombe/omarchy-on-windows.git
 bash omarchy-on-windows/guest/install.sh
 ```
 
