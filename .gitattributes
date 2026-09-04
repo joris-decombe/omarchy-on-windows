@@ -1,0 +1,7 @@
+# The guest kit is checked out inside Linux and run there. CRLF endings make
+# bash choke on the shebang and on every heredoc terminator, so pin LF
+# regardless of the host's core.autocrlf.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
