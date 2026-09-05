@@ -44,9 +44,14 @@ $OW_STAMP
 KERNEL_CMDLINE[default]+=" video=hyperv_fb:${OW_RESOLUTION}"
 CONF
 
-  if [[ $OW_DRY_RUN != 1 ]]; then
+  if [[ $OW_WROTE == 1 && $OW_DRY_RUN != 1 ]]; then
+    # limine-mkinitcpio rebuilds the initramfs and UKI for every kernel, which
+    # takes minutes. Only worth it when the command line actually changed.
     step 'Rebuilding boot entries (limine-mkinitcpio)'
     run sudo limine-mkinitcpio || warn 'limine-mkinitcpio failed; the resolution change will not take effect until it succeeds.'
+    note 'The resolution change needs a reboot.'
+  else
+    note 'Kernel command line unchanged; skipping the initramfs rebuild.'
   fi
 
   # Omarchy loads ~/.config/hypr/monitors.lua after its own defaults, which is
@@ -65,5 +70,4 @@ hl.env("GDK_SCALE", "1")
 LUA
 
   ok 'Monitor configured'
-  note 'The resolution change needs a reboot.'
 }

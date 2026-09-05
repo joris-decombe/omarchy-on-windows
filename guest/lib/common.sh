@@ -30,10 +30,13 @@ run() {
 
 # Writes a file from stdin, creating parents, honouring dry-run, and skipping
 # the write when the content already matches so reruns stay quiet.
+# Sets OW_WROTE=1 when it actually changed the file, so callers can skip
+# expensive follow-up work (rebuilding an initramfs, say) on a no-op re-run.
 write_file() {
   local path=$1 sudo_prefix=${2:-}
   local content
   content=$(cat)
+  OW_WROTE=0
 
   if [[ -f $path ]] && [[ $(cat "$path" 2>/dev/null) == "$content" ]]; then
     note "unchanged: $path"
@@ -52,6 +55,7 @@ write_file() {
     mkdir -p "$(dirname "$path")"
     printf '%s\n' "$content" >"$path"
   fi
+  OW_WROTE=1
   ok "wrote $path"
 }
 
@@ -101,9 +105,24 @@ enable_system_unit() {
 
 enable_user_unit() {
   local unit=$1
+
   if systemctl --user is-enabled --quiet "$unit" 2>/dev/null; then
     note "already enabled: $unit"
     return 0
   fi
+
+  # A unit installed by a package earlier in this same run is invisible to the
+  # user manager until it rescans; without this, enabling it fails with
+  # "Unit <name> does not exist" even though the file is on disk.
+  run systemctl --user daemon-reload 2>/dev/null || true
+
+  if ! systemctl --user list-unit-files "$unit" 2>/dev/null | grep -q "$unit"; then
+    warn "user unit $unit not found even after a daemon-reload."
+    note "Look for what the package actually shipped:"
+    note "  pacman -Qql sunshine sunshine-bin 2>/dev/null | grep -i '\.service$'"
+    note "  systemctl --user list-unit-files | grep -i sunshine"
+    return 1
+  fi
+
   run systemctl --user enable --now "$unit" || warn "could not enable user unit $unit"
 }

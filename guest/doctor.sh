@@ -60,9 +60,11 @@ step 'Streaming'
 check 'sunshine installed' \
   'yay -S sunshine-bin' \
   bash -c 'pacman -Qq sunshine >/dev/null 2>&1 || pacman -Qq sunshine-bin >/dev/null 2>&1'
-check 'sunshine user service active' \
-  'systemctl --user status sunshine  (and: journalctl --user -u sunshine -n50)' \
-  systemctl --user is-active --quiet sunshine.service
+# Sunshine runs from Hyprland's autostart, not a systemd unit (the Arch
+# package ships none), so look for the process rather than a unit's state.
+check 'sunshine running' \
+  'Start it with: hyprctl dispatch exec sunshine   (then: sunshine 2>&1 | head -40)' \
+  pgrep -x sunshine
 check 'sunshine listening on 47989' \
   'The service is up but not bound. Check its log for a capture backend error.' \
   bash -c 'ss -tlnp 2>/dev/null | grep -q ":47989"'

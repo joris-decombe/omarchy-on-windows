@@ -44,20 +44,27 @@ context.objects = [
 CONF
 
   if [[ $OW_DRY_RUN != 1 ]]; then
-    run systemctl --user restart pipewire pipewire-pulse wireplumber 2>/dev/null || \
+    run systemctl --user restart pipewire pipewire-pulse wireplumber 2>/dev/null ||
       warn 'Could not restart PipeWire. Log out and back in to pick up the new sink.'
-    # Give PipeWire a moment to publish the node before we select it.
-    sleep 2
-    if has wpctl && wpctl status 2>/dev/null | grep -q "$OW_SINK_NAME"; then
-      local id
-      id=$(wpctl status | awk -v name="$OW_SINK_NAME" '/Sinks:/,/Sources:/ { if ($0 ~ name) { for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+\.$/) { gsub(/\./,"",$i); print $i; exit } } }')
-      if [[ -n $id ]]; then
-        run wpctl set-default "$id" && ok "default sink is now $OW_SINK_NAME"
+
+    # PipeWire republishes its nodes asynchronously; a fixed sleep either wastes
+    # time or loses the race. Poll instead.
+    local waited=0
+    while ((waited < 15)); do
+      pactl list short sinks 2>/dev/null | grep -q "$OW_SINK_NAME" && break
+      sleep 1
+      ((waited++))
+    done
+
+    if pactl list short sinks 2>/dev/null | grep -q "$OW_SINK_NAME"; then
+      ok "sink $OW_SINK_NAME is up (after ${waited}s)"
+      if run pactl set-default-sink "$OW_SINK_NAME"; then
+        ok "default sink is now $OW_SINK_NAME"
       else
-        warn "Found $OW_SINK_NAME but could not parse its id; set it as default in Omarchy's audio menu."
+        warn "could not set $OW_SINK_NAME as default; do it in Omarchy's audio menu"
       fi
     else
-      warn "Sink $OW_SINK_NAME not visible yet. Check after a reboot with: wpctl status"
+      warn "Sink $OW_SINK_NAME did not appear within ${waited}s. Check after a reboot with: wpctl status"
     fi
   fi
 }

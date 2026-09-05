@@ -76,11 +76,55 @@ CONF
 }
 JSON
 
-  enable_user_unit sunshine.service
+  ow_streaming_autostart
 
   ok 'Sunshine configured'
   note "Web UI: https://$(ow_primary_address):47990 (self-signed certificate; accept it)"
   note 'First connection from Moonlight shows a PIN. Enter it there once.'
+}
+
+# Sunshine has to run *inside* the graphical session -- it captures a live
+# compositor -- and the Arch package does not ship a systemd user unit. Prefer
+# a packaged unit if some future version adds one; otherwise hook Hyprland's
+# own autostart, which is where Omarchy expects session services to live and
+# which guarantees WAYLAND_DISPLAY is already set when Sunshine starts.
+ow_streaming_autostart() {
+  if systemctl --user list-unit-files sunshine.service 2>/dev/null | grep -q '^sunshine\.service'; then
+    enable_user_unit sunshine.service
+    return
+  fi
+
+  note 'No packaged systemd user unit; using Hyprland autostart instead.'
+
+  local autostart="$HOME/.config/hypr/autostart.lua"
+  local line='o.launch_on_start("sunshine")'
+
+  if [[ -f $autostart ]] && grep -qF "$line" "$autostart"; then
+    note "already in $autostart"
+  elif [[ $OW_DRY_RUN == 1 ]]; then
+    note "[dry-run] append $line to $autostart"
+  else
+    mkdir -p "$(dirname "$autostart")"
+    [[ -f $autostart ]] || printf -- '-- Extra autostart processes.\n' >"$autostart"
+    printf '\n-- %s\n%s\n' "$OW_STAMP" "$line" >>"$autostart"
+    ok "added Sunshine to $autostart"
+  fi
+
+  # Start it for the session that is running right now, so there is no need to
+  # log out to test. Hyprland's dispatcher gives it the session environment.
+  if [[ $OW_DRY_RUN != 1 ]] && has hyprctl && pgrep -x Hyprland >/dev/null 2>&1; then
+    if pgrep -x sunshine >/dev/null 2>&1; then
+      note 'Sunshine already running.'
+    else
+      run hyprctl dispatch exec sunshine >/dev/null 2>&1 || warn 'could not start Sunshine now; it will start at next login'
+      sleep 3
+      if pgrep -x sunshine >/dev/null 2>&1; then
+        ok 'Sunshine started'
+      else
+        warn 'Sunshine did not stay up. Check: sunshine 2>&1 | head -40'
+      fi
+    fi
+  fi
 }
 
 ow_primary_address() {
