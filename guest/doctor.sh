@@ -72,7 +72,11 @@ check 'web UI listening on 47990' \
 
 step 'Firewall'
 if has ufw; then
-  if sudo ufw status 2>/dev/null | grep -q '47989'; then
+  # A diagnostic must never block on a password prompt: sudo -n fails fast
+  # instead of asking, so an unprivileged run still reports everything else.
+  if ! sudo -n true 2>/dev/null; then
+    printf '    ufw rules need sudo to read; re-run after a "sudo -v" to check them\n'
+  elif sudo -n ufw status 2>/dev/null | grep -q '47989'; then
     printf '  \033[32mok  \033[0m sunshine ports allowed\n'
   else
     printf '  \033[31mbad \033[0m sunshine ports not in ufw\n'
