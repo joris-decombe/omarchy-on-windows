@@ -18,10 +18,14 @@ OW_LIMINE_DROP_IN=/etc/limine-entry-tool.d/omarchy-on-windows.conf
 ow_display() {
   step "Display (${OW_RESOLUTION})"
 
-  if [[ -e /dev/dri/card0 ]]; then
-    ok "DRM device present: $(ls /dev/dri | tr '\n' ' ')"
+  # The node is not always card0 -- hyperv_drm lands on whatever minor is
+  # free, commonly card1 -- and it is KMS-only, so there is no renderD*
+  # node beside it. Match the family, not a fixed name.
+  local cards=(/dev/dri/card*)
+  if [[ -e ${cards[0]} ]]; then
+    ok "DRM device present: ${cards[*]}"
   else
-    warn 'No /dev/dri device. Hyprland cannot start without one.'
+    warn 'No /dev/dri/card* device. Hyprland cannot start without one.'
     note 'Check that the guest is Generation 2 and that hyperv_drm loaded: lsmod | grep hyperv_drm'
   fi
 

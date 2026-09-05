@@ -28,9 +28,11 @@ printf '    omarchy: %s\n' "$(cat "${OMARCHY_PATH:-/usr/share/omarchy}/version" 
 printf '    address: %s\n' "$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | head -1)"
 
 step 'Display'
-check 'DRM device /dev/dri/card0' \
+# hyperv_drm is not always card0 (card1 is common) and exposes no renderD*
+# node, so check for the family rather than a fixed path.
+check 'DRM device /dev/dri/card*' \
   'Gen 2 VM required. Check with: lsmod | grep hyperv_drm' \
-  test -e /dev/dri/card0
+  bash -c 'compgen -G "/dev/dri/card*" >/dev/null'
 check 'hyperv_drm loaded' \
   'sudo modprobe hyperv_drm' \
   bash -c 'lsmod | grep -q "^hyperv_drm"'
