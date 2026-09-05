@@ -35,10 +35,13 @@ ow_streaming() {
   write_file "$config_dir/sunshine.conf" <<CONF
 # $OW_STAMP
 
-# Capture the live Hyprland session over wlr-screencopy. The kms backend would
-# need cap_sys_admin and buys nothing here, since hyperv_drm has no scanout we
-# could grab more cheaply.
-capture = wlr
+# Capture backend is deliberately NOT forced.
+#
+# Sunshine's "wlr" backend speaks wlr-export-dmabuf-unstable-v1, which
+# Hyprland does not implement (it offers wlr-screencopy instead), so forcing
+# it yields a connection that pairs, streams, and shows nothing but black.
+# Left unset, Sunshine probes and picks KMS, which works against hyperv_drm --
+# provided the binary carries cap_sys_admin, which install.sh grants.
 
 # No GPU in a Hyper-V guest, so x264 on the host CPU it is. On a modern
 # many-core host this encodes 1080p60 without breaking a sweat; the guest's
@@ -46,9 +49,6 @@ capture = wlr
 encoder = software
 sw_preset = superfast
 sw_tune = zerolatency
-
-# Matching the guest's fixed hyperv_fb mode avoids a scale on both ends.
-fps = [$OW_STREAM_FPS]
 
 # Capture the null sink's monitor. Without an explicit sink Sunshine picks the
 # first device it finds, which on a machine with no sound card is nothing.
@@ -58,8 +58,6 @@ audio_sink = ${OW_SINK_NAME}.monitor
 # (here, the Hyper-V switch subnet) rather than exposed further.
 origin_web_ui_allowed = lan
 
-# Sunshine's own resolution changing has nothing to change: the guest's mode is
-# pinned by the kernel command line.
 min_log_level = warning
 CONF
 
@@ -76,6 +74,7 @@ CONF
 }
 JSON
 
+  ow_streaming_capability
   ow_streaming_autostart
 
   ok 'Sunshine configured'
@@ -117,14 +116,47 @@ ow_streaming_autostart() {
       note 'Sunshine already running.'
     else
       run hyprctl dispatch exec sunshine >/dev/null 2>&1 || warn 'could not start Sunshine now; it will start at next login'
-      sleep 3
+      # Sunshine takes several seconds to come up on a CPU-only guest; a short
+      # fixed wait reported a false failure on a launch that was in fact fine.
+      local waited=0
+      while ((waited < 20)); do
+        pgrep -x sunshine >/dev/null 2>&1 && break
+        sleep 1
+        ((waited++))
+      done
       if pgrep -x sunshine >/dev/null 2>&1; then
-        ok 'Sunshine started'
+        ok "Sunshine started (after ${waited}s)"
       else
         warn 'Sunshine did not stay up. Check: sunshine 2>&1 | head -40'
       fi
     fi
   fi
+}
+
+# KMS capture reads framebuffers straight off the DRM device, which the kernel
+# only allows to a process holding CAP_SYS_ADMIN. Sunshine ships unprivileged,
+# so without this its KMS backend is unavailable and it silently falls back to
+# a backend Hyprland cannot feed -- a stream that connects and stays black.
+# A file capability on the binary is narrower than running the whole thing as
+# root, and it is what upstream documents for this case.
+ow_streaming_capability() {
+  local bin
+  bin=$(command -v sunshine 2>/dev/null) || {
+    warn 'sunshine binary not found; skipping capability grant'
+    return 0
+  }
+  bin=$(readlink -f "$bin")
+
+  if getcap "$bin" 2>/dev/null | grep -q 'cap_sys_admin'; then
+    note "cap_sys_admin already set on $bin"
+    return 0
+  fi
+
+  run sudo setcap cap_sys_admin+p "$bin" &&
+    ok "granted cap_sys_admin to $bin" ||
+    warn "could not setcap $bin; KMS capture will be unavailable and the stream will be black"
+
+  note 'A Sunshine package update resets this; re-run install.sh --only streaming after one.'
 }
 
 ow_primary_address() {
