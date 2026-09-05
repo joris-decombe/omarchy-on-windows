@@ -41,13 +41,12 @@ hl.config({
     no_hardware_cursors = true,
     use_cpu_buffer = true,
   },
-
-  misc = {
-    -- Drop to the idle refresh rate when nothing moves. On a CPU renderer this
-    -- is the single biggest win for host CPU usage while you are reading.
-    vfr = true,
-  },
 })
+
+-- Not set here: VFR. Hyprland idles the refresh rate on its own (vfr defaults
+-- to on), and 0.55 moved the key to debug: precisely because it is not meant
+-- to be set in a real config. Setting misc.vfr made Hyprland refuse the whole
+-- file with "unknown config key".
 
 -- Mesa picks llvmpipe here anyway; saying so explicitly keeps it from probing
 -- for a hardware driver on every client start.
