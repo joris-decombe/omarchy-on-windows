@@ -137,12 +137,24 @@ design is in [docs/architecture.md](docs/architecture.md).
 
 ## History
 
-This started as an Omarchy/Hyprland project and the git history reflects that.
-It found four real bugs on the way — a hardcoded `/dev/dri/card0` that misses
-`hyperv_drm`'s `card1`, a Hyprland config key that silently voided the whole
-file, a Sunshine unit that does not exist, and a capture backend Hyprland
-cannot feed. The Hyper-V half of that work carried over unchanged; the guest
-half was replaced.
+This started as an Omarchy project — Hyprland on Arch — and the git history
+shows it. I dropped it once I learned who its creator is and read what he
+posts. I don't want anything to do with him or his software, and that came
+first; the technical case for leaving happened to be just as strong.
+
+Omarchy was fine software. The problem was never Omarchy — it was the
+combination of a tiling Wayland compositor with a hypervisor that offers no
+GPU and no sound card, which forced a capture-and-stream design where every
+piece had to be built by hand. Moving to GNOME replaced that whole stack with
+an RDP server the desktop already ships, and made the window resizable as a
+side effect. [docs/architecture.md](docs/architecture.md) has the reasoning.
+
+Four real bugs turned up along the way, all of them found by running the thing
+rather than reading it: a hardcoded `/dev/dri/card0` that misses `hyperv_drm`'s
+`card1`, a Hyprland config key that silently voided the entire config file, a
+systemd unit the Sunshine package does not actually ship, and a capture backend
+Hyprland cannot feed. The Hyper-V half of that work carried over unchanged; the
+guest half was replaced.
 
 ## License
 
