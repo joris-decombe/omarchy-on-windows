@@ -4,12 +4,12 @@ the user has to fix themselves (elevation, a Windows feature, disk space), so
 we collect them all and report once instead of dying on the first one.
 #>
 
-function Test-OmarchyHost {
+function Test-HyperVHost {
     [CmdletBinding()]
     param(
         [string]$IsoPath,
-        [string]$SwitchName = $script:OmarchyDefaults.SwitchName,
-        [uint64]$DiskBytes = $script:OmarchyDefaults.DiskBytes,
+        [string]$SwitchName = $script:VMDefaults.SwitchName,
+        [uint64]$DiskBytes = $script:VMDefaults.DiskBytes,
         [string]$VMPath
     )
 
@@ -17,10 +17,10 @@ function Test-OmarchyHost {
 
     Write-Step 'Preflight'
 
-    if (Test-Elevated) {
-        Write-Ok 'Running elevated'
+    if (Test-HyperVAccess) {
+        Write-Ok $(if (Test-Elevated) { 'Running elevated' } else { 'Member of Hyper-V Administrators' })
     } else {
-        $problems.Add('Not running as Administrator. Hyper-V cmdlets need an elevated PowerShell (or membership of the local "Hyper-V Administrators" group).')
+        $problems.Add('No Hyper-V access. Either run PowerShell as Administrator, or add yourself once with: Add-LocalGroupMember -Group "Hyper-V Administrators" -Member $env:USERNAME  (then sign out and back in).')
     }
 
     # Get-WindowsOptionalFeature itself needs elevation, so only trust it when we have it.
@@ -43,17 +43,17 @@ function Test-OmarchyHost {
         if (Test-Path -LiteralPath $IsoPath) {
             $size = (Get-Item -LiteralPath $IsoPath).Length
             if ($size -lt 500MB) {
-                $problems.Add("The ISO at $IsoPath is only $([math]::Round($size/1MB)) MB. The Omarchy ISO is several GB - did the download finish?")
+                $problems.Add("The ISO at $IsoPath is only $([math]::Round($size/1MB)) MB. A desktop ISO is a few GB - did the download finish?")
             } else {
                 Write-Ok ("ISO found ({0:N1} GB)" -f ($size / 1GB))
             }
         } else {
-            $problems.Add("ISO not found at $IsoPath. Download it from https://omarchy.org/ first.")
+            $problems.Add("ISO not found at $IsoPath. Download a Fedora Workstation ISO from https://fedoraproject.org/workstation/ first.")
         }
     }
 
     # Switch and free-space checks need Hyper-V access, which needs elevation.
-    if ((Test-Elevated) -and (Get-Module -ListAvailable -Name Hyper-V)) {
+    if ((Test-HyperVAccess) -and (Get-Module -ListAvailable -Name Hyper-V)) {
         if (-not (Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue)) {
             $available = (Get-VMSwitch -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name) -join ', '
             $problems.Add("No virtual switch named '$SwitchName'. Available: ${available}. Pass -SwitchName, or create one in Hyper-V Manager.")

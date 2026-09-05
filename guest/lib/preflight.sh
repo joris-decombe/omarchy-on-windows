@@ -1,39 +1,40 @@
 # Refuses to run anywhere this kit would do the wrong thing.
 
-ow_preflight() {
+lh_preflight() {
   step 'Preflight'
 
-  [[ $EUID -ne 0 ]] || die 'Run this as your normal user, not root. It uses sudo where it needs to.'
+  [[ $EUID -eq 0 ]] || die 'Run this with sudo: sudo bash guest/setup.sh'
+  [[ -n ${SUDO_USER:-} ]] || warn 'No SUDO_USER; RDP will be configured for root, which is probably not what you want.'
 
-  has pacman || die 'This is not an Arch-based system. The guest kit only supports Omarchy.'
+  has dnf || die 'This is not a Fedora/RHEL system. The guest kit targets Fedora Workstation.'
 
-  if [[ -z ${OMARCHY_PATH:-} ]] && [[ ! -d /usr/share/omarchy ]]; then
-    die 'Omarchy not found (no $OMARCHY_PATH, no /usr/share/omarchy). Install Omarchy first.'
+  local pretty
+  pretty=$(. /etc/os-release 2>/dev/null && printf '%s' "$PRETTY_NAME")
+  ok "${pretty:-unknown distribution}"
+
+  # gnome-remote-desktop only grew headless "Remote Login" -- a full RDP
+  # session with its own virtual monitor -- in GNOME 46. On older GNOME you get
+  # screen sharing of an already-running local session instead, which cannot
+  # resize and needs someone logged in at the console first.
+  if has gnome-shell; then
+    local version major
+    version=$(gnome-shell --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)?' | head -1)
+    major=${version%%.*}
+    if [[ -n $major ]] && ((major >= 46)); then
+      ok "GNOME $version (headless Remote Login supported)"
+    else
+      warn "GNOME ${version:-unknown} is older than 46; headless Remote Login is unavailable."
+      note 'You will get screen sharing of the console session instead, without dynamic resolution.'
+    fi
+  else
+    die 'gnome-shell not found. This kit configures GNOME'"'"'s remote desktop.'
   fi
-  local omarchy_path=${OMARCHY_PATH:-/usr/share/omarchy}
-  ok "Omarchy at $omarchy_path$( [[ -f $omarchy_path/version ]] && printf ' (%s)' "$(cat "$omarchy_path/version")" )"
 
   local virt
   virt=$(systemd-detect-virt 2>/dev/null || echo none)
   case $virt in
-  microsoft)
-    ok 'Running under Hyper-V'
-    ;;
-  none)
-    die 'Not running in a VM. This kit configures an Omarchy guest for a Windows host; on bare metal it would only make things worse.'
-    ;;
-  *)
-    warn "Detected '$virt', not Hyper-V. The streaming and audio parts still apply, but the display and integration parts assume Hyper-V."
-    if [[ ${OW_ASSUME_YES:-0} != 1 ]]; then
-      read -rp '    Continue anyway? [y/N] ' reply
-      [[ $reply == [yY]* ]] || die 'Stopped.'
-    fi
-    ;;
+  microsoft) ok 'Running under Hyper-V' ;;
+  none) die 'Not running in a VM. This kit configures a guest for a Windows host.' ;;
+  *) warn "Detected '$virt', not Hyper-V. The RDP parts still apply; the integration services do not." ;;
   esac
-
-  sudo -v || die 'sudo is required.'
-
-  if ! ping -c1 -W3 archlinux.org >/dev/null 2>&1; then
-    warn 'No network reachable. Package installs will fail.'
-  fi
 }

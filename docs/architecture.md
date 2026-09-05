@@ -1,104 +1,89 @@
 # Architecture
 
-## The constraint that decides everything
+## The two constraints
 
-Modern Hyprland renders through [aquamarine](https://wiki.hypr.land/Hypr-Ecosystem/aquamarine/),
-which needs a GBM device obtained from a DRM node — for its `drm` backend and
-for its nested `wayland` backend alike. The old wlroots pixman software path
-that let people run Hyprland in odd places is gone.
+Everything in this repo follows from two facts about a Linux guest on Hyper-V.
 
-So the question "can Omarchy run here?" reduces to "is there a `/dev/dri`?"
+**There is no sound card.** Hyper-V emulates none. A stock guest has no output
+device at all. Hyper-V's own answer is Enhanced Session Mode, which is xrdp
+serving an X11 session over `hv_sock` — usable only if your desktop is X11.
 
-| Environment | DRM node | Hyprland |
+**There is no GPU, and no way to get one.** GPU-PV (what WSL2 uses) needs
+`dxgkrnl`, which Microsoft ships only in the WSL kernel — and it yields
+`/dev/dxg`, not a DRM node. DDA is a Windows Server feature. RemoteFX vGPU was
+removed in 2020. So rendering is Mesa's `llvmpipe` on host CPU cores.
+
+What the guest *does* get is `hyperv_drm`, a genuine KMS device — commonly at
+`/dev/dri/card1`, with **no `renderD*` node beside it**. That distinction
+matters: it is enough for a compositor to run on, and not enough for anything
+that wants to import framebuffers through a render node.
+
+## Why the desktop travels over RDP
+
+The first version of this project captured the desktop with Sunshine and played
+it in Moonlight. That works in principle and cost a lot in practice: software
+capture plus software H.264 encode on a CPU-only guest, a pairing step, a
+`setcap` for KMS access, a virtual audio sink built by hand — and a capture
+backend that has to match the compositor. Sunshine's `wlr` backend speaks
+`wlr-export-dmabuf`, which Hyprland does not implement, so it connected and
+streamed black.
+
+`gnome-remote-desktop` is an RDP server, and since GNOME 46 it does **Remote
+Login**: a headless session created on demand for whoever connects, with a
+virtual monitor sized by the client. That replaces the whole stack:
+
+- **Audio** rides the RDP channel. No sound card needed, and no null sink.
+- **Resolution** is negotiated per connection and renegotiated as the window
+  resizes, so nothing is pinned by a kernel argument.
+- **Clipboard** is part of the protocol.
+- **The client** is `mstsc.exe`, already on the machine.
+
+The Hyper-V console remains useful for exactly one thing: installing the OS,
+and rescuing a guest whose network is broken.
+
+## Remote Desktop vs Remote Login
+
+`gnome-remote-desktop` runs in two modes that are easy to confuse, and only one
+of them is what you want here.
+
+| | Remote Desktop (`--headless`, per-user) | Remote Login (`--system`) |
 |---|---|---|
-| WSL2 | none — `/dev/dxg` and Mesa `d3d12` only, `CONFIG_DRM_VKMS` unset | no |
-| WSL2 + custom kernel with vkms | yes, software KMS | yes, but a custom kernel for every distro on the machine |
-| Hyper-V Gen 2 | yes — `hyperv_drm` | yes |
-| QEMU/KVM | yes — virtio-gpu, and accelerated with venus | yes, fastest |
+| Scope | one user's session | the login screen, any user |
+| Needs someone logged in first | yes | no |
+| Service | user bus | `gnome-remote-desktop.service` (system) |
+| Virtual monitor sized by client | partly | yes |
+| GNOME version | earlier | **46+** |
 
-This repo takes the Hyper-V route: a real DRM device on a stock kernel, using
-the hypervisor Windows already ships.
+`guest/lib/remote-desktop.sh` configures Remote Login and deliberately leaves
+the per-user service alone. Both modes refuse to enable RDP without a TLS
+certificate, so the kit generates a self-signed one — real TLS on the wire,
+untrusted issuer, which is why the generated `.rdp` profile sets
+`authentication level:i:0` rather than having `mstsc` refuse outright.
 
-## The second constraint: sound
+## Secure Boot
 
-Hyper-V emulates no audio hardware for a Linux guest. There is nothing for
-PipeWire to find. Hyper-V's own answer is Enhanced Session Mode, which is xrdp
-serving an **X11** session over `hv_sock` — and a Wayland compositor has no X11
-session to serve. The two features are mutually exclusive: you can have
-Hyprland or you can have Hyper-V's sound, not both through that door.
+Hyper-V Generation 2 VMs default to the `MicrosoftWindows` Secure Boot
+template, which will not validate a Linux bootloader. Fedora's shim *is* signed
+— by Microsoft's third-party UEFI CA — so it boots with Secure Boot on under
+the `MicrosoftUEFICertificateAuthority` template. `New-LinuxVM` selects that
+template when you pass `-SecureBoot`, and turns Secure Boot off otherwise,
+which is what unsigned installers need.
 
-Options considered:
+## The firewall rule
 
-| Approach | Video | Audio | Works with Hyprland |
-|---|---|---|---|
-| Hyper-V basic console | yes | no | yes |
-| Enhanced Session Mode (xrdp) | yes | yes | **no** |
-| wayvnc / VNC | yes | no | yes |
-| gnome-remote-desktop | yes | yes | GNOME only |
-| **Sunshine → Moonlight** | yes | **yes** | **yes** |
+Fedora's firewalld denies inbound by default, so RDP needs a rule. The kit
+derives the subnet from the address the guest actually holds rather than
+hardcoding one, because the two switch types behave differently: the Hyper-V
+Default Switch is NAT and renumbers on every host reboot, while an external
+switch hands out a real LAN address. Deriving it means the same code is correct
+on both — and it scopes the rule to that subnet instead of opening 3389 wide.
 
-Sunshine captures the live Hyprland session over `wlr-screencopy`, captures a
-PipeWire sink monitor for audio, encodes H.264, and Moonlight on Windows plays
-both while sending input back. One connection, one window, sound included.
+## What is deliberately not here
 
-The Hyper-V console stays useful: it is how you install, and it is a silent
-fallback when the stream will not start.
-
-## Rendering
-
-There is no GPU. Not by omission — Hyper-V has no path to one for a Linux
-guest:
-
-- **GPU-PV** (what WSL2 uses) requires `dxgkrnl` in the guest, which Microsoft
-  ships only in the WSL kernel — and it yields `/dev/dxg`, not a DRM node, so
-  it would not help Hyprland even if you got it working.
-- **DDA** (full device assignment) is a Windows Server feature.
-- **RemoteFX vGPU** was removed in 2020.
-
-So Mesa falls back to `llvmpipe` on `hyperv_drm`'s dumb buffers, and every
-frame is composited on host CPU cores. `guest/lib/perf.sh` responds to that by
-turning off animations, blur, shadows, rounding and hardware cursors, and
-enabling VFR so an idle desktop costs nothing.
-
-Sunshine's encode is likewise software x264 at `superfast`/`zerolatency`.
-Between compositing and encoding, expect to spend a few host cores while you
-are actively using the desktop.
-
-## Display mode
-
-Hyper-V's synthetic display has no EDID and no mode list, so the guest cannot
-negotiate a resolution the way it would with a monitor. The mode is fixed at
-boot by `video=hyperv_fb:WxH` on the kernel command line, and 1920x1200 is the
-ceiling.
-
-Omarchy uses limine with `limine-entry-tool` drop-ins, so we write
-`/etc/limine-entry-tool.d/omarchy-on-windows.conf` and run
-`sudo limine-mkinitcpio` — the same mechanism `omarchy-hibernation-setup` uses
-for its own `resume=` parameters. A reboot applies it.
-
-## Fitting into Omarchy without fighting it
-
-Omarchy 4 ("quattro") configures Hyprland in Lua. Its `~/.config/hypr/hyprland.lua`
-loads package defaults from `$OMARCHY_PATH/default/hypr/`, then a fixed list of
-user modules: `monitors`, `input`, `bindings`, `looknfeel`, `autostart`. Those
-user files are yours; the defaults belong to the package and are replaced on
-update.
-
-So:
-
-- **`monitors.lua`** we own outright — its stock content is one `hl.monitor()`
-  call and a `GDK_SCALE`, both of which are wrong for a fixed synthetic display.
-- **The rendering profile** goes in a sibling module,
-  `~/.config/hypr/omarchy-on-windows.lua`, with a single `require` line appended
-  to `looknfeel.lua`. That way your own look-and-feel edits survive, and the
-  hook is idempotent.
-
-Nothing under `$OMARCHY_PATH` is touched.
-
-## Why this is not an Omarchy plugin
-
-Omarchy has a real plugin system, but it loads **QML plugins inside the running
-`omarchy-shell` Quickshell process** — bar widgets, panels, overlays, menus,
-headless services. A plugin cannot influence installation, kernel parameters,
-bootloader entries, systemd units, or how the compositor starts. Everything
-this repo does happens before or below the point where a plugin exists.
+- **Unattended installs.** The earlier Omarchy version built a `cidata` drive
+  for its installer. Fedora uses Kickstart, which is a different mechanism, and
+  nothing here needs it yet.
+- **A tiling window manager.** That was the previous design, and the source of
+  most of its difficulty. Anyone wanting tiling on this base is better served
+  by a GNOME extension than by swapping the compositor, because the compositor
+  is exactly what made capture hard.

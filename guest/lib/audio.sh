@@ -1,70 +1,34 @@
 # Audio.
 #
-# Hyper-V emulates no sound device whatsoever - there is no card for PipeWire
-# to find, and Hyper-V's own answer (RDP audio over Enhanced Session Mode)
-# needs an xrdp X11 session, which a Hyprland guest does not have.
+# Hyper-V emulates no sound card, so a stock guest has no output device at all
+# and applications fall back to a null device or refuse to start.
 #
-# So the guest gets a null sink instead: a real, selectable output device that
-# discards its samples locally, and whose monitor Sunshine captures and ships
-# to Moonlight on Windows. Applications see an ordinary sink; the sound comes
-# out of the Windows speakers.
+# gnome-remote-desktop creates its own PipeWire node for the RDP session and
+# routes it to the client, so on a Remote Login session sound Just Works. This
+# module exists for the gap around that: making sure PipeWire is actually
+# installed and running, and reporting what the session will use.
 
-OW_SINK_NAME=${OW_SINK_NAME:-omarchy-stream}
+lh_audio() {
+  step 'Audio'
 
-ow_audio() {
-  step 'Audio (virtual sink for streaming)'
+  dnf_install pipewire pipewire-pulseaudio wireplumber
 
-  pacman_install pipewire pipewire-pulse wireplumber
+  local user
+  user=$(target_user)
 
-  if pactl list short sinks 2>/dev/null | grep -q 'alsa_output'; then
-    warn 'A hardware sink exists, which is unexpected under Hyper-V. Adding the stream sink alongside it.'
+  if [[ $LH_DRY_RUN == 1 ]]; then
+    note '[dry-run] skipping PipeWire inspection'
+    return 0
   fi
 
-  # A PipeWire config drop-in rather than a runtime `pactl load-module`, so the
-  # sink survives reboots and PipeWire restarts.
-  write_file "$HOME/.config/pipewire/pipewire.conf.d/50-omarchy-stream-sink.conf" <<CONF
-# $OW_STAMP
-#
-# A null sink that Sunshine captures. object.linger keeps it alive even when
-# nothing is playing, so Moonlight does not lose the audio stream between
-# sounds.
-context.objects = [
-  { factory = adapter
-    args = {
-      factory.name              = support.null-audio-sink
-      node.name                 = "$OW_SINK_NAME"
-      node.description          = "Omarchy Stream (to Windows)"
-      media.class               = Audio/Sink
-      audio.position            = [ FL FR ]
-      monitor.channel-volumes   = true
-      object.linger             = true
-    }
-  }
-]
-CONF
-
-  if [[ $OW_DRY_RUN != 1 ]]; then
-    run systemctl --user restart pipewire pipewire-pulse wireplumber 2>/dev/null ||
-      warn 'Could not restart PipeWire. Log out and back in to pick up the new sink.'
-
-    # PipeWire republishes its nodes asynchronously; a fixed sleep either wastes
-    # time or loses the race. Poll instead.
-    local waited=0
-    while ((waited < 15)); do
-      pactl list short sinks 2>/dev/null | grep -q "$OW_SINK_NAME" && break
-      sleep 1
-      ((waited++))
-    done
-
-    if pactl list short sinks 2>/dev/null | grep -q "$OW_SINK_NAME"; then
-      ok "sink $OW_SINK_NAME is up (after ${waited}s)"
-      if run pactl set-default-sink "$OW_SINK_NAME"; then
-        ok "default sink is now $OW_SINK_NAME"
-      else
-        warn "could not set $OW_SINK_NAME as default; do it in Omarchy's audio menu"
-      fi
-    else
-      warn "Sink $OW_SINK_NAME did not appear within ${waited}s. Check after a reboot with: wpctl status"
-    fi
+  # PipeWire is a user service; inspect it as the real user, not as root.
+  if runuser -u "$user" -- systemctl --user is-active --quiet pipewire 2>/dev/null; then
+    ok "PipeWire running for $user"
+  else
+    note "PipeWire is not running for $user yet; it starts with their session."
   fi
+
+  note 'RDP audio: gnome-remote-desktop publishes its own sink for the remote'
+  note 'session and sends it to the Windows client. Nothing else to configure -'
+  note 'just make sure the .rdp profile has audiomode:i:0, which Start-LinuxDesktop sets.'
 }

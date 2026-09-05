@@ -1,52 +1,55 @@
 # Firewall.
 #
-# Omarchy ships ufw denying everything inbound. Sunshine needs a handful of
-# ports open, and only ever to the Windows host - the Hyper-V switch subnet -
-# never to the wider network the host is on.
+# Fedora runs firewalld with a default-deny inbound zone, so RDP needs an
+# explicit rule. Scope it to the subnet the guest is actually on rather than
+# opening 3389 to everything the host can route to.
 
-ow_firewall() {
-  step 'Firewall (ufw rules for Sunshine)'
+lh_firewall() {
+  step 'Firewall (RDP)'
 
-  if ! has ufw; then
-    warn 'ufw not installed; skipping. Omarchy normally ships it.'
+  if ! has firewall-cmd; then
+    warn 'firewalld not installed; skipping. Open TCP/UDP 3389 yourself if something blocks it.'
+    return 0
+  fi
+
+  if ! systemctl is-active --quiet firewalld 2>/dev/null; then
+    note 'firewalld installed but not running; nothing to open.'
     return 0
   fi
 
   local subnet
-  subnet=$(ow_host_subnet)
+  subnet=$(lh_guest_subnet)
+
   if [[ -z $subnet ]]; then
-    warn 'Could not work out the Hyper-V switch subnet; falling back to private ranges.'
-    subnet='192.168.0.0/16'
+    warn 'Could not determine the guest subnet; allowing the rdp service in the default zone instead.'
+    run firewall-cmd --permanent --add-service=rdp >/dev/null || warn 'could not add the rdp service'
+  else
+    ok "Allowing RDP from $subnet"
+    run firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=\"$subnet\" port port=\"$LH_RDP_PORT\" protocol=\"tcp\" accept" >/dev/null ||
+      warn 'could not add the TCP rule'
+    # RDP can use UDP for a lower-latency transport; mstsc falls back to TCP
+    # without it, so this is an improvement rather than a requirement.
+    run firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=\"$subnet\" port port=\"$LH_RDP_PORT\" protocol=\"udp\" accept" >/dev/null ||
+      warn 'could not add the UDP rule'
   fi
-  ok "Allowing Sunshine from $subnet"
 
-  # Sunshine's fixed port block: 47984/47989/48010 TCP and 47998-48000/48002
-  # UDP, plus 47990 for the web UI where the pairing PIN goes in.
-  local rule
-  for rule in \
-    '47984/tcp' '47989/tcp' '47990/tcp' '48010/tcp' \
-    '47998:48000/udp' '48002/udp' '48010/udp'; do
-    run sudo ufw allow from "$subnet" to any port "${rule%/*}" proto "${rule#*/}" \
-      comment 'omarchy-on-windows sunshine' >/dev/null || warn "could not add rule $rule"
-  done
-
-  run sudo ufw reload >/dev/null 2>&1 || true
+  run firewall-cmd --reload >/dev/null || warn 'firewall-cmd --reload failed'
   ok 'Rules applied'
 }
 
-# The Hyper-V Default Switch hands out a NAT'd /28-ish range that changes every
-# host reboot, so derive the subnet from whatever the guest actually has rather
-# than hardcoding one.
-ow_host_subnet() {
-  ip -4 -o addr show scope global 2>/dev/null |
-    awk '{ print $4 }' |
-    head -1 |
-    while IFS=/ read -r addr prefix; do
-      [[ -n $addr ]] || continue
-      # Normalize to the network address so ufw takes it as a subnet.
-      python3 - "$addr" "$prefix" <<'PY' 2>/dev/null || printf '%s/%s\n' "${addr%.*}.0" "$prefix"
+# Derive the subnet from the address the guest actually holds, so this works on
+# the Hyper-V Default Switch (NAT, renumbered every host reboot) and on an
+# external switch (a real LAN address) without being told which.
+lh_guest_subnet() {
+  local cidr
+  cidr=$(ip -4 -o addr show scope global 2>/dev/null | awk '{ print $4 }' | head -1)
+  [[ -n $cidr ]] || return 0
+  python3 - "$cidr" <<'PY' 2>/dev/null
 import ipaddress, sys
-print(ipaddress.ip_network(f"{sys.argv[1]}/{sys.argv[2]}", strict=False))
+print(ipaddress.ip_network(sys.argv[1], strict=False))
 PY
-    done
+}
+
+lh_primary_address() {
+  ip -4 -o addr show scope global 2>/dev/null | awk '{ print $4 }' | cut -d/ -f1 | head -1
 }

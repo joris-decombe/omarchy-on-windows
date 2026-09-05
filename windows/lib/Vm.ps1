@@ -1,42 +1,45 @@
 <#
-Hyper-V VM lifecycle for an Omarchy guest.
+Hyper-V VM lifecycle for a Linux desktop guest.
 
-Two Hyper-V facts drive every choice in here:
+Two Hyper-V facts drive the choices in here:
 
-  * Secure Boot must be off. The Omarchy ISO is not signed for Microsoft's
-    UEFI CA, and the manual says as much for bare metal too.
-  * Hyper-V gives a Linux guest a KMS display (hyperv_drm) but no sound card
-    at all, and its Enhanced Session Mode is xrdp/X11, which cannot host a
-    Wayland compositor. So the console here is only for installing; the real
-    desktop arrives over Sunshine/Moonlight, set up by guest/install.sh.
+  * Secure Boot defaults to a Microsoft template that most Linux installers
+    will not boot. Fedora is signed for the Microsoft UEFI CA, so it can boot
+    with Secure Boot on -- but only under the "MicrosoftUEFICertificateAuthority"
+    template, not the Windows one Hyper-V picks by default.
+  * Hyper-V emulates no sound card for a Linux guest, and its Enhanced Session
+    Mode is xrdp serving X11. Both are irrelevant here: the desktop arrives
+    over the guest's own RDP server (gnome-remote-desktop), which carries
+    video, audio, clipboard and dynamic resolution on one connection. The
+    Hyper-V console is only for installing.
 #>
 
-function New-OmarchyVM {
+function New-LinuxVM {
     [CmdletBinding(SupportsShouldProcess)]
     param(
-        [string]$Name = $script:OmarchyDefaults.VMName,
+        [string]$Name = $script:VMDefaults.VMName,
         [Parameter(Mandatory)][string]$IsoPath,
-        [int]$ProcessorCount = $script:OmarchyDefaults.ProcessorCount,
-        [uint64]$MemoryBytes = $script:OmarchyDefaults.MemoryBytes,
-        [uint64]$DiskBytes = $script:OmarchyDefaults.DiskBytes,
-        [string]$SwitchName = $script:OmarchyDefaults.SwitchName,
+        [int]$ProcessorCount = $script:VMDefaults.ProcessorCount,
+        [uint64]$MemoryBytes = $script:VMDefaults.MemoryBytes,
+        [uint64]$DiskBytes = $script:VMDefaults.DiskBytes,
+        [string]$SwitchName = $script:VMDefaults.SwitchName,
         [string]$VMPath,
-        # Directory of installer config files; when given, the install runs
-        # unattended. See lib/Cidata.ps1.
-        [string]$CidataDir,
+        # Fedora boots fine with Secure Boot on under the right template;
+        # leave it off for installers that are not signed for it.
+        [switch]$SecureBoot,
         # Lets the guest run KVM/Docker-in-Docker style nested workloads.
         [switch]$NestedVirtualization,
         [switch]$Force,
         [switch]$NoStart
     )
 
-    Test-OmarchyHost -IsoPath $IsoPath -SwitchName $SwitchName -DiskBytes $DiskBytes -VMPath $VMPath
+    Test-HyperVHost -IsoPath $IsoPath -SwitchName $SwitchName -DiskBytes $DiskBytes -VMPath $VMPath
 
     if (Get-VM -Name $Name -ErrorAction SilentlyContinue) {
         if (-not $Force) {
             throw "A VM named '$Name' already exists. Pass -Force to remove and recreate it, or -Name to pick another."
         }
-        Remove-OmarchyVM -Name $Name -DeleteDisks -Confirm:$false
+        Remove-LinuxVM -Name $Name -DeleteDisks -Confirm:$false
     }
 
     if (-not $VMPath) { $VMPath = (Get-VMHost).VirtualHardDiskPath }
@@ -54,9 +57,15 @@ function New-OmarchyVM {
         -SwitchName $SwitchName -Path $VMPath
     Write-Ok ("{0} vCPU, {1:N0} GB RAM, {2:N0} GB disk on '{3}'" -f $ProcessorCount, ($MemoryBytes/1GB), ($DiskBytes/1GB), $SwitchName)
 
-    # Secure Boot off: the ISO will not boot with it on.
-    Set-VMFirmware -VM $vm -EnableSecureBoot Off
-    Write-Ok 'Secure Boot disabled'
+    if ($SecureBoot) {
+        # Fedora's shim is signed for Microsoft's third-party UEFI CA, which is
+        # a different template from the Windows one Hyper-V defaults to.
+        Set-VMFirmware -VM $vm -EnableSecureBoot On -SecureBootTemplate MicrosoftUEFICertificateAuthority
+        Write-Ok 'Secure Boot on (Microsoft UEFI CA template)'
+    } else {
+        Set-VMFirmware -VM $vm -EnableSecureBoot Off
+        Write-Ok 'Secure Boot disabled'
+    }
 
     Set-VMProcessor -VM $vm -Count $ProcessorCount
     if ($NestedVirtualization) {
@@ -76,15 +85,9 @@ function New-OmarchyVM {
     Add-VMDvdDrive -VM $vm -Path $IsoPath
     Write-Ok "Attached installer ISO"
 
-    if ($CidataDir) {
-        $cidataPath = Join-Path $vmDir 'cidata.vhdx'
-        New-OmarchyCidataDisk -SourceDir $CidataDir -Path $cidataPath -Force | Out-Null
-        Add-VMHardDiskDrive -VM $vm -Path $cidataPath
-        Write-Ok 'Attached cidata disk (unattended install)'
-    }
 
     # Boot the empty disk first: it falls through to the DVD on the first boot
-    # and takes over once Omarchy is installed, so nothing has to be unplugged.
+    # and takes over once the distro is installed, so nothing has to be unplugged.
     $bootDisk = Get-VMHardDiskDrive -VM $vm | Where-Object Path -eq $vhdPath
     Set-VMFirmware -VM $vm -BootOrder $bootDisk, (Get-VMDvdDrive -VM $vm)
 
@@ -96,16 +99,16 @@ function New-OmarchyVM {
     if (-not $NoStart) {
         Start-VM -VM $vm
         Write-Ok 'VM started'
-        Write-Note 'Opening the console. Secure Boot is already off; just run the installer.'
-        Connect-OmarchyVM -Name $Name
+        Write-Note 'Opening the console. Run the installer, then see guest/setup.sh.'
+        Connect-LinuxVM -Name $Name
     }
 
     Get-VM -Name $Name
 }
 
-function Connect-OmarchyVM {
+function Connect-LinuxVM {
     [CmdletBinding()]
-    param([string]$Name = $script:OmarchyDefaults.VMName)
+    param([string]$Name = $script:VMDefaults.VMName)
 
     # Basic session only. Enhanced Session Mode negotiates an xrdp X11 session,
     # which a Hyprland guest does not have.
@@ -113,10 +116,10 @@ function Connect-OmarchyVM {
         -ArgumentList 'localhost', $Name
 }
 
-function Remove-OmarchyVM {
+function Remove-LinuxVM {
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
     param(
-        [string]$Name = $script:OmarchyDefaults.VMName,
+        [string]$Name = $script:VMDefaults.VMName,
         [switch]$DeleteDisks
     )
 

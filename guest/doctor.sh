@@ -1,12 +1,13 @@
 #!/bin/bash
 #
-# Reports the state of every piece install.sh sets up, and says what to do
-# about each one that is wrong. Read-only: it changes nothing.
+# Reports the state of every piece setup.sh configures, and says what to do
+# about each one that is wrong. Read-only: it changes nothing, and it never
+# blocks on a password prompt.
 
 set -o pipefail
-OW_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+LH_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib/common.sh
-source "$OW_ROOT/lib/common.sh"
+source "$LH_ROOT/lib/common.sh"
 
 fails=0
 
@@ -22,71 +23,55 @@ check() {
   fi
 }
 
-step 'Host and virtualization'
-printf '    virt: %s\n' "$(systemd-detect-virt 2>/dev/null || echo unknown)"
-printf '    omarchy: %s\n' "$(cat "${OMARCHY_PATH:-/usr/share/omarchy}/version" 2>/dev/null || echo 'not found')"
+step 'Host and guest'
+printf '    virt:    %s\n' "$(systemd-detect-virt 2>/dev/null || echo unknown)"
+printf '    distro:  %s\n' "$(. /etc/os-release 2>/dev/null && printf '%s' "$PRETTY_NAME")"
+printf '    gnome:   %s\n' "$(gnome-shell --version 2>/dev/null || echo 'not installed')"
 printf '    address: %s\n' "$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | head -1)"
 
-step 'Display'
-# hyperv_drm is not always card0 (card1 is common) and exposes no renderD*
-# node, so check for the family rather than a fixed path.
-check 'DRM device /dev/dri/card*' \
-  'Gen 2 VM required. Check with: lsmod | grep hyperv_drm' \
-  bash -c 'compgen -G "/dev/dri/card*" >/dev/null'
-check 'hyperv_drm loaded' \
-  'sudo modprobe hyperv_drm' \
-  bash -c 'lsmod | grep -q "^hyperv_drm"'
-check 'video= mode pinned on the kernel command line' \
-  'Re-run install.sh, then sudo limine-mkinitcpio, then reboot.' \
-  bash -c 'grep -q "video=hyperv_fb:" /proc/cmdline'
-check 'Hyprland running' \
-  'Log in to the Hyper-V console first; the stream captures a live session.' \
-  pgrep -x Hyprland
-
 step 'Hyper-V integration'
-check 'hv_kvp_daemon active (host can see the guest IP)' \
-  'sudo systemctl enable --now hv_kvp_daemon.service' \
-  systemctl is-active --quiet hv_kvp_daemon.service
+check 'hypervkvpd active (host can see the guest IP)' \
+  'sudo systemctl enable --now hypervkvpd.service' \
+  systemctl is-active --quiet hypervkvpd.service
+
+step 'Remote desktop'
+check 'gnome-remote-desktop installed' \
+  'sudo dnf install gnome-remote-desktop' \
+  rpm -q gnome-remote-desktop
+check 'TLS certificate present' \
+  'sudo bash setup.sh --only remote_desktop' \
+  test -f /var/lib/gnome-remote-desktop/certificates/rdp-tls.crt
+check 'system RDP enabled in grdctl' \
+  'sudo grdctl --system rdp enable' \
+  bash -c 'grdctl --system status 2>/dev/null | grep -qiE "RDP:[[:space:]]*enabled|enabled"'
+check 'gnome-remote-desktop.service active' \
+  'sudo systemctl enable --now gnome-remote-desktop.service  (then: journalctl -u gnome-remote-desktop -n 50)' \
+  systemctl is-active --quiet gnome-remote-desktop.service
+check 'listening on 3389' \
+  'The service is up but not bound. Check its journal for a TLS or permission error.' \
+  bash -c 'ss -tlnH "sport = :3389" 2>/dev/null | grep -q .'
 
 step 'Audio'
-check "sink ${OW_SINK_NAME:-omarchy-stream} exists" \
-  'Re-run: bash install.sh --only audio' \
-  bash -c "pactl list short sinks | grep -q '${OW_SINK_NAME:-omarchy-stream}'"
-check "sink ${OW_SINK_NAME:-omarchy-stream} is the default" \
-  'wpctl status, then wpctl set-default <id>' \
-  bash -c "pactl get-default-sink 2>/dev/null | grep -q '${OW_SINK_NAME:-omarchy-stream}'"
-
-step 'Streaming'
-check 'sunshine installed' \
-  'yay -S sunshine-bin' \
-  bash -c 'pacman -Qq sunshine >/dev/null 2>&1 || pacman -Qq sunshine-bin >/dev/null 2>&1'
-# Sunshine runs from Hyprland's autostart, not a systemd unit (the Arch
-# package ships none), so look for the process rather than a unit's state.
-check 'sunshine running' \
-  'Start it with: hyprctl dispatch exec sunshine   (then: sunshine 2>&1 | head -40)' \
-  pgrep -x sunshine
-check 'sunshine listening on 47989' \
-  'The service is up but not bound. Check its log for a capture backend error.' \
-  bash -c 'ss -tlnp 2>/dev/null | grep -q ":47989"'
-check 'web UI listening on 47990' \
-  'Needed to enter the Moonlight pairing PIN.' \
-  bash -c 'ss -tlnp 2>/dev/null | grep -q ":47990"'
+check 'pipewire installed' \
+  'sudo dnf install pipewire wireplumber' \
+  rpm -q pipewire
+printf '    RDP sessions get their own sink from gnome-remote-desktop;\n'
+printf '    a missing sink on the console is normal and not a fault.\n'
 
 step 'Firewall'
-if has ufw; then
-  # A diagnostic must never block on a password prompt: sudo -n fails fast
-  # instead of asking, so an unprivileged run still reports everything else.
+if has firewall-cmd && systemctl is-active --quiet firewalld 2>/dev/null; then
+  # A diagnostic must never block on a password prompt.
   if ! sudo -n true 2>/dev/null; then
-    printf '    ufw rules need sudo to read; re-run after a "sudo -v" to check them\n'
-  elif sudo -n ufw status 2>/dev/null | grep -q '47989'; then
-    printf '  \033[32mok  \033[0m sunshine ports allowed\n'
+    printf '    firewalld rules need sudo to read; re-run after a "sudo -v"\n'
+  elif sudo -n firewall-cmd --list-all 2>/dev/null | grep -q '3389\|rdp'; then
+    printf '  \033[32mok  \033[0m RDP allowed\n'
   else
-    printf '  \033[31mbad \033[0m sunshine ports not in ufw\n'
-    printf '        \033[90mRe-run: bash install.sh --only firewall\033[0m\n'
+    printf '  \033[31mbad \033[0m no RDP rule in firewalld\n'
+    printf '        \033[90mRe-run: sudo bash setup.sh --only firewall\033[0m\n'
     fails=$((fails + 1))
   fi
 else
-  printf '    ufw not installed; nothing to check\n'
+  printf '    firewalld not running; nothing to check\n'
 fi
 
 printf '\n'

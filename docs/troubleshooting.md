@@ -1,121 +1,121 @@
 # Troubleshooting
 
-Run `bash guest/doctor.sh` inside the guest first. It checks each piece and
-prints the fix under any that fails.
-
-## The VM will not boot the ISO
-
-Secure Boot. `New-OmarchyVM` disables it, but if you built the VM by hand:
-
-```powershell
-Set-VMFirmware -VMName Omarchy -EnableSecureBoot Off
-```
-
-The Omarchy ISO is not signed for Microsoft's UEFI CA — the manual says the
-same for bare metal.
+Start with `sudo bash guest/doctor.sh` inside the guest. It checks each piece
+and prints the fix under any that fails, and it never blocks on a password
+prompt.
 
 ## Hyper-V cmdlets say "You do not have the required permission"
 
-Run PowerShell elevated, or add yourself to the group once and sign out:
+Run PowerShell elevated, or add yourself to the group once:
 
 ```powershell
 Add-LocalGroupMember -Group 'Hyper-V Administrators' -Member $env:USERNAME
 ```
 
-## Hyprland will not start in the guest
+Then **sign out and back in**. Group membership only takes effect on a new
+logon token, so it will keep failing in your current session.
 
-```bash
-ls /dev/dri
+## The VM will not boot the ISO
+
+Secure Boot. Generation 2 VMs default to the Windows template, which rejects a
+Linux bootloader:
+
+```powershell
+Set-VMFirmware -VMName Fedora -EnableSecureBoot Off
 ```
 
-Expect `card0`. No device means the VM is Generation 1 — Hyper-V cannot convert
-a VM's generation, so recreate it. If the device is there but Hyprland still
-dies, check that the driver loaded with `lsmod | grep hyperv_drm`.
+Or, for a signed distro like Fedora, use the right template instead:
 
-## Get-OmarchyVMAddress finds nothing
+```powershell
+Set-VMFirmware -VMName Fedora -EnableSecureBoot On -SecureBootTemplate MicrosoftUEFICertificateAuthority
+```
 
-The host learns the guest's address from the KVP daemon, which is in the Arch
-`hyperv` package:
+## Get-LinuxVMAddress finds nothing
+
+The host learns the address from the KVP daemon, in the `hyperv-daemons`
+package:
 
 ```bash
-sudo systemctl enable --now hv_kvp_daemon.service
+sudo systemctl enable --now hypervkvpd.service
 ```
 
 Until then, read it in the guest with `ip -4 addr`.
 
-## Moonlight cannot find the host
+## mstsc cannot connect
 
-Sunshine has to be running in a **logged-in graphical session** — it is a user
-service capturing a live compositor, not a system daemon.
-
-```bash
-systemctl --user status sunshine
-journalctl --user -u sunshine -n 50
-ss -tlnp | grep 4798
-```
-
-If it is listening but Moonlight still cannot reach it, check ufw
-(`sudo ufw status`) and that the Hyper-V switch subnet in those rules still
-matches the guest's current address — the Default Switch renumbers on host
-reboot. Refresh them with:
+Check the guest is actually listening:
 
 ```bash
-bash guest/install.sh --only firewall
+ss -tlnp | grep 3389
+systemctl status gnome-remote-desktop
+journalctl -u gnome-remote-desktop -n 50
 ```
 
-## Pairing PIN never appears
+A service that is up but not bound is nearly always the TLS certificate: it is
+missing, or `gnome-remote-desktop` cannot read it. Re-run
+`sudo bash guest/setup.sh --only remote_desktop`.
 
-Moonlight shows the PIN; you type it into **Sunshine's** web UI, which runs in
-the guest at `https://<guest-ip>:47990`. Its certificate is self-signed, so
-accept the warning. Open it from a browser inside the guest — the `lan` origin
-policy will not accept it from elsewhere.
+If it is listening but Windows still cannot reach it, check firewalld
+(`sudo firewall-cmd --list-all`) and confirm the allowed subnet still matches
+the guest's current address — the Hyper-V Default Switch renumbers on host
+reboot. Refresh with `sudo bash guest/setup.sh --only firewall`.
+
+## mstsc refuses because of the certificate
+
+The certificate is self-signed, so `mstsc` will not accept it under the default
+authentication level. `Start-LinuxDesktop` writes a profile with
+`authentication level:i:0` for that reason. If you are connecting by hand with
+`mstsc /v:<ip>`, you will hit this — use `Start-LinuxDesktop` instead, or add
+the setting to your own `.rdp` file.
+
+## I get a login screen but the session never starts
+
+That is Remote Login working and the session failing behind it. Check the
+journal for `gnome-remote-desktop` and for GDM:
+
+```bash
+journalctl -u gnome-remote-desktop -b
+journalctl -u gdm -b | tail -50
+```
+
+On a CPU-only guest a session can simply be slow to appear the first time,
+while `llvmpipe` warms up.
 
 ## No sound
 
-```bash
-pactl list short sinks
-pactl get-default-sink
-```
+Audio rides the RDP connection, so it is a client-side setting as often as a
+guest one. Confirm the profile has `audiomode:i:0` — "play on this computer".
+`Start-LinuxDesktop` sets it; a hand-made connection may not.
 
-Expect `omarchy-stream` in both. There is no hardware sink under Hyper-V, so if
-it is missing then nothing has anywhere to play:
+In the guest, the RDP session gets its own PipeWire sink from
+`gnome-remote-desktop`. A missing sink on the *console* session is normal and
+not a fault — there is no sound card for it to find.
 
-```bash
-bash guest/install.sh --only audio
-```
+## The window will not resize the desktop
 
-If the sink exists but Moonlight is silent, check that `audio_sink` in
-`~/.config/sunshine/sunshine.conf` reads `omarchy-stream.monitor` — the
-monitor, not the sink.
-
-## The desktop is sluggish
-
-Expected to a point: this is CPU rendering plus CPU encoding. Things that help,
-in order of effect:
-
-1. More vCPUs. `Set-VMProcessor -VMName Omarchy -Count 12` with the VM off.
-2. A lower resolution: `bash guest/install.sh --resolution 1600x900`, reboot.
-3. `--fps 30` if the encoder rather than the compositor is the bottleneck.
-4. Confirm the perf profile actually loaded:
-   `grep -n omarchy-on-windows ~/.config/hypr/looknfeel.lua`
-
-`htop` in the guest during a stream tells you which half is saturated: Hyprland
-means compositing, `sunshine` means encoding.
-
-## Resolution changes did nothing
-
-The mode is a kernel parameter and needs a reboot after
-`sudo limine-mkinitcpio`. Verify it landed:
+Dynamic resolution needs three things: GNOME 46+, Remote **Login** (not the
+per-user Remote Desktop mode), and `dynamic resolution:i:1` in the profile.
+Check the first two with:
 
 ```bash
-grep -o 'video=hyperv_fb:[^ ]*' /proc/cmdline
+gnome-shell --version
+grdctl --system status
 ```
 
-Nothing there means `limine-mkinitcpio` did not rerun. Run it by hand and
-reboot.
+If GNOME is older than 46, headless Remote Login does not exist and no client
+setting will produce it.
+
+## Everything is slow
+
+Expected to a point — this is `llvmpipe` on host CPU cores, with no GPU
+available to a Hyper-V Linux guest at all. What helps, in order:
+
+1. More vCPUs: `Set-VMProcessor -VMName Fedora -Count 12` with the VM off.
+2. Turn off GNOME animations (`gsettings set org.gnome.desktop.interface enable-animations false`).
+3. A smaller window — every pixel is composited and encoded on the CPU.
 
 ## Starting over
 
 ```powershell
-Remove-OmarchyVM -Name Omarchy -DeleteDisks
+Remove-LinuxVM -Name Fedora -DeleteDisks
 ```

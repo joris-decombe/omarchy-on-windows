@@ -1,13 +1,11 @@
-# Shared helpers. Dot-sourced by Omarchy.psm1.
+# Shared helpers. Dot-sourced by HyperVLinux.psm1.
 
-$script:OmarchyDefaults = @{
-    VMName        = 'Omarchy'
+$script:VMDefaults = @{
+    VMName         = 'Fedora'
     ProcessorCount = 8
-    MemoryBytes   = 12GB
-    DiskBytes     = 100GB
-    SwitchName    = 'Default Switch'
-    # Hyper-V's synthetic display tops out here for Gen 2 Linux guests.
-    Resolution    = '1920x1080'
+    MemoryBytes    = 12GB
+    DiskBytes      = 100GB
+    SwitchName     = 'Default Switch'
 }
 
 function Write-Step {
@@ -36,7 +34,16 @@ function Test-Elevated {
     $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-# The repo root, so guest/ can be found from any of the host scripts.
-function Get-OmarchyRepoRoot {
+# Hyper-V cmdlets also work unelevated for members of this group, which is the
+# saner way to live than a UAC prompt per command.
+function Test-HyperVAccess {
+    if (Test-Elevated) { return $true }
+    try {
+        $sid = (Get-LocalGroup 'Hyper-V Administrators' -ErrorAction Stop).SID.Value
+        return [Security.Principal.WindowsIdentity]::GetCurrent().Groups.Value -contains $sid
+    } catch { return $false }
+}
+
+function Get-RepoRoot {
     Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 }
