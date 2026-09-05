@@ -85,8 +85,18 @@ git clone https://github.com/joris-decombe/linux-on-hyperv.git
 sudo bash linux-on-hyperv/guest/setup.sh
 ```
 
+This repo is **private**, so that clone will ask for credentials — use a
+personal access token as the password, or push the kit from Windows instead
+(no GitHub involved):
+
+```powershell
+Copy-GuestKit -UserName <your-guest-user>
+```
+
+which needs `sudo systemctl enable --now sshd` in the guest first.
+
 `--dry-run` shows every change without making one. `--only`/`--skip` narrow it
-to a module.
+to a module: `integration`, `remote_desktop`, `audio`, `firewall`.
 
 ### 3. Open the desktop
 

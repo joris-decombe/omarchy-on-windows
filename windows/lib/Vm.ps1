@@ -110,8 +110,9 @@ function Connect-LinuxVM {
     [CmdletBinding()]
     param([string]$Name = $script:VMDefaults.VMName)
 
-    # Basic session only. Enhanced Session Mode negotiates an xrdp X11 session,
-    # which a Hyprland guest does not have.
+    # Basic session only, and that is the point: this opens the install/rescue
+    # console, not the desktop. The desktop comes from the guest's own RDP
+    # server via Start-LinuxDesktop, which is where sound and resizing live.
     Start-Process -FilePath "$env:SystemRoot\System32\vmconnect.exe" `
         -ArgumentList 'localhost', $Name
 }

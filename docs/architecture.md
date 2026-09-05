@@ -80,9 +80,9 @@ on both — and it scopes the rule to that subnet instead of opening 3389 wide.
 
 ## What is deliberately not here
 
-- **Unattended installs.** The earlier Omarchy version built a `cidata` drive
-  for its installer. Fedora uses Kickstart, which is a different mechanism, and
-  nothing here needs it yet.
+- **Unattended installs.** An earlier revision built a `cidata` drive for its
+  installer. Fedora uses Kickstart, a different mechanism, and nothing here
+  needs it yet.
 - **A tiling window manager.** That was the previous design, and the source of
   most of its difficulty. Anyone wanting tiling on this base is better served
   by a GNOME extension than by swapping the compositor, because the compositor
