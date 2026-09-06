@@ -27,6 +27,10 @@ function New-LinuxVM {
         # Fedora boots fine with Secure Boot on under the right template;
         # leave it off for installers that are not signed for it.
         [switch]$SecureBoot,
+        # Pin the RAM instead of ballooning. Steadier under load, but the VM
+        # then needs its full startup allocation free before it will start.
+        [switch]$StaticMemory,
+        [uint64]$MinimumMemoryBytes = 2GB,
         # Lets the guest run KVM/Docker-in-Docker style nested workloads.
         [switch]$NestedVirtualization,
         [switch]$Force,
@@ -73,9 +77,23 @@ function New-LinuxVM {
         Write-Ok 'Nested virtualization exposed'
     }
 
-    # Dynamic memory makes a desktop guest stutter under memory pressure, and
-    # llvmpipe rendering is already the tight resource here. Pin it.
-    Set-VMMemory -VM $vm -DynamicMemoryEnabled $false
+    if ($StaticMemory) {
+        Set-VMMemory -VM $vm -DynamicMemoryEnabled $false -StartupBytes $MemoryBytes
+        Write-Ok ('Static memory: {0:N0} GB' -f ($MemoryBytes / 1GB))
+    } else {
+        # Dynamic memory by default. Hyper-V demands the whole startup
+        # allocation be free before it will start a VM, and on a workstation
+        # that also runs WSL -- which grows to its .wslconfig cap and does not
+        # give it back -- that is exactly when a static VM refuses to boot.
+        # Ballooning costs a little smoothness under pressure and buys a VM
+        # that starts. The guest needs hv_balloon, which every current Linux
+        # kernel has.
+        $startup = [Math]::Min($MemoryBytes, 4GB)
+        Set-VMMemory -VM $vm -DynamicMemoryEnabled $true `
+            -MinimumBytes $MinimumMemoryBytes -StartupBytes $startup -MaximumBytes $MemoryBytes
+        Write-Ok ('Dynamic memory: {0:N0}-{1:N0} GB, starting at {2:N0} GB' -f `
+            ($MinimumMemoryBytes / 1GB), ($MemoryBytes / 1GB), ($startup / 1GB))
+    }
 
     # Automatic checkpoints silently snapshot on every start, which doubles the
     # disk footprint of a 100 GB desktop image for no benefit.
@@ -97,7 +115,29 @@ function New-LinuxVM {
     Set-VM -VM $vm -EnhancedSessionTransportType HvSocket
 
     if (-not $NoStart) {
-        Start-VM -VM $vm
+        # Start-VM reports failure without throwing under some conditions (a
+        # host short on memory is the common one), so trust the state, not the
+        # absence of an exception. Claiming success here once sent a user off
+        # to look for a console that was never going to appear.
+        Start-VM -VM $vm -ErrorAction Continue
+        $vm = Get-VM -Name $Name
+        if ($vm.State -ne 'Running') {
+            throw @"
+The VM was created but did not start (state: $($vm.State)).
+
+The usual cause is host memory: Hyper-V needs the full startup RAM available up
+front. Check what is free with:
+    Get-CimInstance Win32_OperatingSystem |
+        Select-Object @{n='FreeGB';e={[math]::Round(`$_.FreePhysicalMemory/1MB,1)}}
+
+WSL is a frequent culprit - it holds whatever it has peaked at until you run
+'wsl --shutdown' or set autoMemoryReclaim in .wslconfig.
+
+Lower the VM's memory and start it:
+    Set-VMMemory -VMName $Name -StartupBytes 8GB
+    Start-VM -Name $Name
+"@
+        }
         Write-Ok 'VM started'
         Write-Note 'Opening the console. Run the installer, then see guest/setup.sh.'
         Connect-LinuxVM -Name $Name

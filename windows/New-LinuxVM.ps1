@@ -29,6 +29,8 @@ param(
     [string]$SwitchName = 'Default Switch',
     [string]$VMPath,
     [switch]$SecureBoot,
+    [switch]$StaticMemory,
+    [int]$MinMemoryGB = 2,
     [switch]$NestedVirtualization,
     [switch]$Force,
     [switch]$NoStart
@@ -47,6 +49,8 @@ $splat = @{
 }
 if ($VMPath)               { $splat.VMPath = $VMPath }
 if ($SecureBoot)           { $splat.SecureBoot = $true }
+if ($StaticMemory)         { $splat.StaticMemory = $true }
+$splat.MinimumMemoryBytes = [uint64]$MinMemoryGB * 1GB
 if ($NestedVirtualization) { $splat.NestedVirtualization = $true }
 if ($Force)                { $splat.Force = $true }
 if ($NoStart)              { $splat.NoStart = $true }

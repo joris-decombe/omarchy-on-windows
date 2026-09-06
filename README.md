@@ -4,12 +4,35 @@ Run a Linux desktop on Windows in a Hyper-V VM, with display, **sound**,
 clipboard and a resolution that follows the window — over the Remote Desktop
 client Windows already ships.
 
-Two halves:
+Three parts:
 
 - **`windows/`** — a PowerShell module that builds the Hyper-V VM correctly the
   first time and opens the desktop.
-- **`guest/`** — a shell kit you run once inside Fedora that turns on GNOME's
+- **`guest/`** — a shell kit you run once inside the VM that turns on GNOME's
   own RDP server and wires up the Hyper-V integration services.
+- **`wsl/`** — a smaller kit for WSL, which cannot host a desktop but *can* run
+  individual applications on the real GPU.
+
+## Two routes, and what each can actually do
+
+| | Hyper-V VM (`guest/`) | WSL (`wsl/`) |
+|---|---|---|
+| Full desktop | **yes** — GNOME over RDP | no |
+| GPU | none, ever — `llvmpipe` | **yes** — D3D12 on the discrete GPU |
+| Sound | RDP audio | WSLg, already working |
+| Resize with the window | yes | n/a |
+| Start-up | full OS boot | seconds |
+
+They are complements, not alternatives: run the desktop in the VM, and send
+anything GPU-hungry to WSL, where it appears as an ordinary Windows window.
+
+Why WSL cannot host the desktop is not a matter of configuration — it was
+measured, three ways, and the errors are recorded in
+[`wsl/lib/remote-desktop.sh`](wsl/lib/remote-desktop.sh). The short version:
+WSL exposes `/dev/dxg` but no DRM node, Mesa's `d3d12` driver renders
+applications through `/dev/dxg` happily, and every compositor and
+remote-desktop server wants a DRM device that is not there.
+`gnome-remote-desktop` segfaults on `fd -1`.
 
 ## Why RDP, and not screen capture
 
@@ -126,8 +149,31 @@ password — Remote Login has no separate RDP credentials.
 
 | Command | What it does |
 |---|---|
-| `guest/setup.sh` | Set everything up; idempotent, re-runnable |
+| `guest/setup.sh` | Set the VM up; idempotent, re-runnable |
 | `guest/doctor.sh` | Check every piece and print the fix for each failure |
+| `wsl/setup.sh` | Set up GPU-accelerated apps in a WSL distro |
+| `wsl/doctor.sh` | Same, for WSL |
+| `gpu-run <cmd>` | (in WSL) run an application on the discrete GPU |
+
+### WSL
+
+```bash
+sudo dnf install -y git
+git clone https://github.com/joris-decombe/linux-on-hyperv.git
+sudo bash linux-on-hyperv/wsl/setup.sh
+```
+
+Then, from Windows or a WSL shell:
+
+```bash
+gpu-run firefox
+```
+
+Verified on Fedora 44 / WSL2: `gpu-run glxinfo -B` reports
+`D3D12 (NVIDIA GeForce RTX 2070), Accelerated: yes`, where plain `glxinfo`
+reports `llvmpipe`. Fedora's stock Mesa needs `GALLIUM_DRIVER=d3d12` set
+explicitly — Ubuntu patches theirs to auto-detect — and picks the integrated
+GPU unless told otherwise. `gpu-run` sets both.
 
 ## What gets changed in the guest
 

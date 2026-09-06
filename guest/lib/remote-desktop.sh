@@ -34,12 +34,12 @@ lh_make_cert() {
 
   run mkdir -p "$dir"
   run openssl req -new -newkey rsa:4096 -days 3650 -nodes -x509 \
-    -subj "/C=NZ/ST=NA/L=NA/O=linux-on-hyperv/CN=$(hostname)" \
+    -subj "/C=NZ/ST=NA/L=NA/O=linux-on-hyperv/CN=$(uname -n)" \
     -out "$crt" -keyout "$key" 2>/dev/null || die 'could not generate the RDP TLS certificate'
 
   [[ -n $owner ]] && run chown -R "$owner" "$dir" 2>/dev/null
   run chmod 600 "$key"
-  ok "generated $crt"
+  [[ $LH_DRY_RUN == 1 ]] || ok "generated $crt"
 }
 
 # --- GNOME ----------------------------------------------------------------

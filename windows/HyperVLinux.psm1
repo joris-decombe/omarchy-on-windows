@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 
 # Order matters: Common defines the defaults and logging the rest lean on.
-$libs = @('Common.ps1', 'Preflight.ps1', 'Vm.ps1', 'Guest.ps1')
+$libs = @('Common.ps1', 'Preflight.ps1', 'Vm.ps1', 'Guest.ps1', 'Wsl.ps1')
 foreach ($lib in $libs) {
     . (Join-Path $PSScriptRoot "lib/$lib")
 }
@@ -14,4 +14,6 @@ Export-ModuleMember -Function @(
     'Get-LinuxVMAddress'
     'Start-LinuxDesktop'
     'Copy-GuestKit'
+    'Start-WslDesktop'
+    'Get-WslDistro'
 )
