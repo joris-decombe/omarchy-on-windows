@@ -9,6 +9,9 @@
     FunctionsToExport = @(
         'Test-HyperVHost'
         'New-LinuxVM'
+    'New-KickstartDisk'
+    'New-LinuxPasswordHash'
+    'Add-KickstartDisk'
         'Connect-LinuxVM'
         'Remove-LinuxVM'
         'Get-LinuxVMAddress'

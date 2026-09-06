@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 
 # Order matters: Common defines the defaults and logging the rest lean on.
-$libs = @('Common.ps1', 'Preflight.ps1', 'Vm.ps1', 'Guest.ps1', 'Wsl.ps1')
+$libs = @('Common.ps1', 'Preflight.ps1', 'Vm.ps1', 'Kickstart.ps1', 'Guest.ps1', 'Wsl.ps1')
 foreach ($lib in $libs) {
     . (Join-Path $PSScriptRoot "lib/$lib")
 }
@@ -9,6 +9,9 @@ foreach ($lib in $libs) {
 Export-ModuleMember -Function @(
     'Test-HyperVHost'
     'New-LinuxVM'
+    'New-KickstartDisk'
+    'New-LinuxPasswordHash'
+    'Add-KickstartDisk'
     'Connect-LinuxVM'
     'Remove-LinuxVM'
     'Get-LinuxVMAddress'
