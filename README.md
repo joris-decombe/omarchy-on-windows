@@ -142,7 +142,9 @@ password — Remote Login has no separate RDP credentials.
 | `Connect-LinuxVM` | Open the Hyper-V console (basic session, no sound) |
 | `Remove-LinuxVM` | Delete the VM, optionally its disks |
 | `Get-LinuxVMAddress` | Guest IP, as reported by the KVP daemon |
-| `Start-LinuxDesktop` | Open the desktop over RDP |
+| `Start-LinuxDesktop` | Open the VM desktop over RDP |
+| `Start-WslApp` | Run a Linux app on the GPU, in its own Windows window |
+| `Test-WslGpu` | Report which renderer WSL apps actually get |
 | `Copy-GuestKit` | scp `guest/` into the VM |
 
 ### Guest

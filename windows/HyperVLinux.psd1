@@ -14,7 +14,8 @@
         'Get-LinuxVMAddress'
         'Start-LinuxDesktop'
         'Copy-GuestKit'
-    'Start-WslDesktop'
+    'Start-WslApp'
+    'Test-WslGpu'
     'Get-WslDistro'
     )
     CmdletsToExport   = @()
