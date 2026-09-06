@@ -82,6 +82,25 @@ Then sign out and back in — group membership only applies to a new logon token
 
 ### 1. Create the VM
 
+The unattended path is the better one, and not only for convenience: the
+Hyper-V console does not propagate lock-key state, so Caps Lock silently
+inverts case, and a password mistyped that way is only discovered later when
+the login screen rejects it. From an **elevated** PowerShell:
+
+```powershell
+cd windows
+.\Install-FedoraUnattended.ps1 -IsoPath D:\iso\Fedora-Workstation-Live-44-1.7.x86_64.iso
+```
+
+It prompts once for the new Linux user's password, hashes it locally, writes a
+Kickstart onto a disk labeled `OEMDRV` -- which Anaconda looks for by name,
+with no kernel argument -- and boots. Nothing is typed into the VM.
+
+Elevation is needed only here: `Mount-VHD` attaches a disk to Windows itself,
+which Hyper-V Administrators does not cover.
+
+To drive the installer by hand instead:
+
 ```powershell
 cd windows
 .\New-LinuxVM.ps1 -IsoPath D:\iso\Fedora-Workstation-Live-x86_64.iso
@@ -139,6 +158,9 @@ password — Remote Login has no separate RDP credentials.
 |---|---|
 | `Test-HyperVHost` | Preflight only: access, Hyper-V, switch, ISO, disk space |
 | `New-LinuxVM` | Create and start the VM |
+| `New-KickstartDisk` | Build an OEMDRV disk for an unattended install |
+| `New-LinuxPasswordHash` | Hash a password locally for Kickstart |
+| `Add-KickstartDisk` | Attach one to an existing VM |
 | `Connect-LinuxVM` | Open the Hyper-V console (basic session, no sound) |
 | `Remove-LinuxVM` | Delete the VM, optionally its disks |
 | `Get-LinuxVMAddress` | Guest IP, as reported by the KVP daemon |
