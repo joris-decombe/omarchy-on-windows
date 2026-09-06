@@ -30,6 +30,22 @@ Or, for a signed distro like Fedora, use the right template instead:
 Set-VMFirmware -VMName Fedora -EnableSecureBoot On -SecureBootTemplate MicrosoftUEFICertificateAuthority
 ```
 
+## Caps Lock is out of sync in the Hyper-V console
+
+The basic session does not propagate lock-key state to the guest: the guest
+tracks its own Caps Lock, so the two drift apart and your host keyboard LED is
+reporting Windows, not the VM. You get inverted case with nothing on screen to
+explain it.
+
+During an install this matters most for the password, because you will not find
+out it went in inverted until the login screen rejects it. Use Shift rather
+than Caps Lock -- modifiers pass through correctly -- and reveal the password
+field before committing to it. Pressing Caps Lock once inside the VM window
+resyncs the two.
+
+This is a console-only problem. `mstsc` synchronizes lock keys when it
+connects, so it disappears once you are on RDP.
+
 ## Get-LinuxVMAddress finds nothing
 
 The host learns the address from the KVP daemon, in the `hyperv-daemons`
