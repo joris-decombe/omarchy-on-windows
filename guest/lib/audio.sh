@@ -11,7 +11,7 @@
 lh_audio() {
   step 'Audio'
 
-  dnf_install pipewire pipewire-pulseaudio wireplumber
+  pkg_install $(lh_packages audio)
 
   local user
   user=$(target_user)
@@ -28,7 +28,18 @@ lh_audio() {
     note "PipeWire is not running for $user yet; it starts with their session."
   fi
 
-  note 'RDP audio: gnome-remote-desktop publishes its own sink for the remote'
-  note 'session and sends it to the Windows client. Nothing else to configure -'
-  note 'just make sure the .rdp profile has audiomode:i:0, which Start-LinuxDesktop sets.'
+  case $(lh_rdp_backend) in
+  gnome)
+    note 'gnome-remote-desktop publishes its own sink for the remote session and'
+    note 'sends it to the client. Nothing else to configure - just keep'
+    note 'audiomode:i:0 in the .rdp profile, which Start-LinuxDesktop sets.'
+    ;;
+  kde)
+    note 'KRdp carries audio from the session it is attached to.'
+    ;;
+  xrdp)
+    note 'xrdp needs pulseaudio-module-xrdp for sound; without it the session is'
+    note 'silent. It is packaged on Debian/Ubuntu and not on Fedora.'
+    ;;
+  esac
 }

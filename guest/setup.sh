@@ -16,7 +16,7 @@ LH_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 # shellcheck source=lib/common.sh
 source "$LH_ROOT/lib/common.sh"
-for module in preflight integration remote-desktop audio firewall; do
+for module in desktop preflight integration remote-desktop audio firewall; do
   # shellcheck disable=SC1090
   source "$LH_ROOT/lib/$module.sh"
 done
@@ -28,6 +28,9 @@ usage() {
 Usage: sudo bash setup.sh [options]
 
 Options:
+  --desktop NAME  gnome | kde | xfce | cinnamon | mate | auto (default: auto).
+                  Only gnome gives a session sized by the connecting client;
+                  see lib/desktop.sh for what each backend can and cannot do.
   --port N        RDP port (default: ${LH_RDP_PORT}).
   --only MODULE   Run just one module. Repeatable.
   --skip MODULE   Skip a module. Repeatable.
@@ -43,6 +46,10 @@ skip=()
 
 while [[ $# -gt 0 ]]; do
   case $1 in
+  --desktop)
+    LH_DESKTOP=${2:?--desktop needs a name}
+    shift 2
+    ;;
   --port)
     LH_RDP_PORT=${2:?--port needs a number}
     shift 2
@@ -70,6 +77,13 @@ while [[ $# -gt 0 ]]; do
     ;;
   esac
 done
+
+# Validate the desktop name here rather than letting it fail deep in dispatch,
+# after packages have already been installed.
+case ${LH_DESKTOP:-auto} in
+auto | gnome | kde | xfce | cinnamon | mate) ;;
+*) die "unknown desktop '${LH_DESKTOP}'. Known: gnome kde xfce cinnamon mate auto" ;;
+esac
 
 for name in "${only[@]}" "${skip[@]}"; do
   [[ " ${LH_MODULES[*]} " == *" $name "* ]] || die "unknown module '$name'. Known: ${LH_MODULES[*]}"
@@ -108,10 +122,14 @@ $(printf '\033[36mDone.\033[0m')
       Import-Module .\HyperVLinux.psd1
       Start-LinuxDesktop
 
-  You will get a GDM login screen over RDP. Log in with this guest's own
-  username and password - Remote Login does not use separate RDP credentials.
-
-  Resize the window and the desktop resizes with it. Sound plays on Windows.
+  Desktop: ${LH_DESKTOP}, backend: $(lh_rdp_backend).
+$(if [[ $(lh_rdp_backend) == gnome ]]; then
+    printf '%s
+' "  You will get a GDM login screen over RDP. Log in with this guest's own"       "  username and password - Remote Login does not use separate RDP credentials."       ""       "  Resize the window and the desktop resizes with it. Sound plays on Windows."
+  else
+    printf '%s
+' "  This backend does not resize with the client window - only the GNOME"       "  backend does. See the notes printed above for what it needs."
+  fi)
   The Hyper-V console still works as a silent fallback.
 
   Something wrong? Run: sudo bash $LH_ROOT/doctor.sh

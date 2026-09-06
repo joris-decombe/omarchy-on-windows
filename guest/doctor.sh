@@ -8,6 +8,9 @@ set -o pipefail
 LH_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib/common.sh
 source "$LH_ROOT/lib/common.sh"
+source "$LH_ROOT/lib/desktop.sh"
+lh_detect_distro
+lh_detect_desktop >/dev/null 2>&1 || LH_DESKTOP=unknown
 
 fails=0
 
@@ -35,21 +38,30 @@ check 'hypervkvpd active (host can see the guest IP)' \
   systemctl is-active --quiet hypervkvpd.service
 
 step 'Remote desktop'
-check 'gnome-remote-desktop installed' \
-  'sudo dnf install gnome-remote-desktop' \
-  rpm -q gnome-remote-desktop
-check 'TLS certificate present' \
-  'sudo bash setup.sh --only remote_desktop' \
-  test -f /var/lib/gnome-remote-desktop/certificates/rdp-tls.crt
-check 'system RDP enabled in grdctl' \
-  'sudo grdctl --system rdp enable' \
-  bash -c 'grdctl --system status 2>/dev/null | grep -qiE "RDP:[[:space:]]*enabled|enabled"'
-check 'gnome-remote-desktop.service active' \
-  'sudo systemctl enable --now gnome-remote-desktop.service  (then: journalctl -u gnome-remote-desktop -n 50)' \
-  systemctl is-active --quiet gnome-remote-desktop.service
-check 'listening on 3389' \
-  'The service is up but not bound. Check its journal for a TLS or permission error.' \
-  bash -c 'ss -tlnH "sport = :3389" 2>/dev/null | grep -q .'
+case $(lh_rdp_backend) in
+gnome)
+  check 'gnome-remote-desktop installed'     'sudo bash setup.sh --only remote_desktop'     bash -c 'command -v grdctl >/dev/null'
+  check 'TLS certificate present'     'sudo bash setup.sh --only remote_desktop'     test -f /var/lib/gnome-remote-desktop/certificates/rdp-tls.crt
+  check 'system RDP enabled in grdctl'     'sudo grdctl --system rdp enable'     bash -c 'grdctl --system status 2>/dev/null | grep -qi enabled'
+  check 'gnome-remote-desktop.service active'     'sudo systemctl enable --now gnome-remote-desktop.service  (then: journalctl -u gnome-remote-desktop -n 50)'     systemctl is-active --quiet gnome-remote-desktop.service
+  ;;
+kde)
+  check 'krdp installed'     'sudo bash setup.sh --only remote_desktop'     bash -c 'command -v krdpserver >/dev/null'
+  printf '    KRdp is enabled per-user in System Settings, not by this script,
+'
+  printf '    and cannot do headless login - see lib/desktop.sh.
+'
+  ;;
+xrdp)
+  check 'xrdp.service active'     'sudo systemctl enable --now xrdp'     systemctl is-active --quiet xrdp.service
+  check '.xsession written for the session user'     'sudo bash setup.sh --only remote_desktop'     bash -c 'test -f "$(getent passwd "${SUDO_USER:-$(id -un)}" | cut -d: -f6)/.xsession"'
+  ;;
+*)
+  printf '    no backend for this desktop
+'
+  ;;
+esac
+check "listening on ${LH_RDP_PORT:-3389}"   'The service is up but not bound. Check its journal.'   bash -c "ss -tlnH \"sport = :${LH_RDP_PORT:-3389}\" 2>/dev/null | grep -q ."
 
 step 'Audio'
 check 'pipewire installed' \

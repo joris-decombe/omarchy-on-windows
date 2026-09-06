@@ -50,19 +50,59 @@ write_file() {
 
 has() { command -v "$1" >/dev/null 2>&1; }
 
-pkg_installed() { rpm -q "$1" >/dev/null 2>&1; }
+# --- distro abstraction -------------------------------------------------
+#
+# The point of this kit is now to compare desktops, which means it has to
+# install packages on whichever base the desktop ships best on. Everything
+# distro-specific funnels through here rather than being sprinkled around.
 
-dnf_install() {
+# Sets LH_DISTRO (the ID from os-release) and LH_PKG (the package manager).
+lh_detect_distro() {
+  local id id_like
+  id=$(. /etc/os-release 2>/dev/null && printf '%s' "${ID:-}")
+  id_like=$(. /etc/os-release 2>/dev/null && printf '%s' "${ID_LIKE:-}")
+  LH_DISTRO=${id:-unknown}
+
+  case "$id $id_like" in
+  *fedora* | *rhel* | *centos*) LH_PKG=dnf ;;
+  *debian* | *ubuntu*) LH_PKG=apt ;;
+  *suse*) LH_PKG=zypper ;;
+  *) LH_PKG="" ;;
+  esac
+}
+
+pkg_installed() {
+  case $LH_PKG in
+  dnf) rpm -q "$1" >/dev/null 2>&1 ;;
+  apt) dpkg -s "$1" >/dev/null 2>&1 ;;
+  zypper) rpm -q "$1" >/dev/null 2>&1 ;;
+  *) return 1 ;;
+  esac
+}
+
+# Installs only what is missing, so re-runs are quiet and fast.
+pkg_install() {
   local missing=()
   local pkg
   for pkg in "$@"; do
+    [[ -n $pkg ]] || continue
     pkg_installed "$pkg" || missing+=("$pkg")
   done
   if [[ ${#missing[@]} -eq 0 ]]; then
     note "already installed: $*"
     return 0
   fi
-  run dnf install -y "${missing[@]}" || die "dnf failed for: ${missing[*]}"
+
+  case $LH_PKG in
+  dnf) run dnf install -y "${missing[@]}" ;;
+  apt)
+    run apt-get update -qq
+    run env DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
+    ;;
+  zypper) run zypper --non-interactive install "${missing[@]}" ;;
+  *) die "unknown package manager; install these by hand: ${missing[*]}" ;;
+  esac || die "package install failed for: ${missing[*]}"
+
   ok "installed: ${missing[*]}"
 }
 
