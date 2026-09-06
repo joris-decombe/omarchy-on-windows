@@ -49,6 +49,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'HyperVLinux.psd1') -Force
+# Test-Elevated and the Write-* helpers are module-internal, so importing the
+# module does not bring them into this script's scope. Dot-source them.
+. (Join-Path $PSScriptRoot 'lib/Common.ps1')
 
 if (-not $FullName) { $FullName = $UserName }
 if (-not $Hostname) { $Hostname = $Name.ToLower() }
