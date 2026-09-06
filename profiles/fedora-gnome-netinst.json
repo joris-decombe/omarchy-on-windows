@@ -1,0 +1,31 @@
+{
+  "name": "fedora-gnome-netinst",
+  "description": "Fedora 44 + GNOME in a Hyper-V VM, installed unattended from netinst. Anaconda boots directly, reads the OEMDRV kickstart, and nothing is typed into the console.",
+  "target": "vm",
+  "vm": {
+    "name": "Fedora",
+    "isoPath": "D:\\Downloads\\Fedora-Everything-netinst-x86_64-44-1.7.iso",
+    "processorCount": 8,
+    "memoryGB": 12,
+    "minMemoryGB": 2,
+    "staticMemory": false,
+    "diskGB": 100,
+    "switchName": "HA-External",
+    "secureBoot": true
+  },
+  "install": {
+    "unattended": true,
+    "userName": "joris",
+    "fullName": "Joris",
+    "hostname": "fedora",
+    "timezone": "Pacific/Auckland",
+    "keyboardLayout": "us",
+    "locale": "en_NZ.UTF-8",
+    "authorizedKeyPath": "C:\\Users\\joris\\.ssh\\linux-on-hyperv.pub",
+    "installGuestTools": true
+  },
+  "guest": {
+    "desktop": "gnome",
+    "rdpPort": 3389
+  }
+}

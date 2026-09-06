@@ -80,10 +80,28 @@ on both — and it scopes the rule to that subnet instead of opening 3389 wide.
 
 ## What is deliberately not here
 
-- **Unattended installs.** An earlier revision built a `cidata` drive for its
-  installer. Fedora uses Kickstart, a different mechanism, and nothing here
-  needs it yet.
 - **A tiling window manager.** That was the previous design, and the source of
   most of its difficulty. Anyone wanting tiling on this base is better served
   by a GNOME extension than by swapping the compositor, because the compositor
   is exactly what made capture hard.
+
+## Unattended installs, and which media can do them
+
+Anaconda scans for a volume labeled `OEMDRV` at startup and runs the `ks.cfg`
+it finds there, with no kernel argument. The kit builds that volume as a FAT32
+VHDX, because Windows has no `genisoimage` and PowerShell makes a VHDX
+natively -- and because FAT32 uppercases its label, which is what Anaconda
+wants.
+
+**The media matters, and this is easy to get wrong.** A Fedora *Live* image
+boots to a GNOME desktop and only starts Anaconda when someone clicks "Install
+to Hard Drive" -- so at boot nothing scans for `OEMDRV` and the kickstart is
+silently ignored. A *netinst* or DVD image boots straight into Anaconda, which
+does scan. `Get-LinuxProfile` refuses the Live + unattended combination for
+this reason.
+
+The two media also want different kickstarts. A Live image installs its own
+squashfs payload and ignores `%packages`; a netinst has no payload at all and
+needs both an install source (`url --mirrorlist=...`) and a package
+environment. `New-KickstartDisk -Live` omits both; otherwise it emits them, and
+the desktop named in the profile chooses the environment group.

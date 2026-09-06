@@ -263,6 +263,22 @@ function Read-Iso {
     $answer.Trim()
 }
 
+
+# The desktop chosen in the profile decides what the installer pulls down.
+# Fedora names these as environment groups; "@^" selects an environment rather
+# than a plain group.
+function Get-DesktopEnvironmentGroup {
+    param([string]$Desktop)
+    switch ($Desktop) {
+        'gnome' { '@^workstation-product-environment' }
+        'kde' { '@^kde-desktop-environment' }
+        'xfce' { '@^xfce-desktop-environment' }
+        'cinnamon' { '@^cinnamon-desktop-environment' }
+        'mate' { '@^mate-desktop-environment' }
+        default { '@^workstation-product-environment' }
+    }
+}
+
 <#
 .SYNOPSIS
     Apply a profile: build the VM, or configure the WSL distro.
@@ -317,11 +333,26 @@ function Invoke-LinuxProfile {
         $vmDir = Split-Path -Parent (Get-VMHardDiskDrive -VMName $p.vm.name | Select-Object -First 1 -ExpandProperty Path)
         $ksPath = Join-Path $vmDir "$($p.vm.name)-kickstart.vhdx"
 
-        New-KickstartDisk -Path $ksPath -UserName $p.install.userName `
-            -FullName $p.install.fullName -Hostname $p.install.hostname `
-            -PasswordHash $hash -Timezone $p.install.timezone `
-            -KeyboardLayout $p.install.keyboardLayout -Locale $p.install.locale `
-            -AuthorizedKey $key -Force | Out-Null
+        $ksSplat = @{
+            Path           = $ksPath
+            UserName       = $p.install.userName
+            FullName       = $p.install.fullName
+            Hostname       = $p.install.hostname
+            PasswordHash   = $hash
+            Timezone       = $p.install.timezone
+            KeyboardLayout = $p.install.keyboardLayout
+            Locale         = $p.install.locale
+            AuthorizedKey  = $key
+            Force          = $true
+        }
+        # A Live image installs its own payload and ignores %packages; a
+        # netinst has nothing until told what to fetch.
+        if ($p.vm.isoPath -match 'Live') {
+            $ksSplat.Live = $true
+        } else {
+            $ksSplat.PackageEnvironment = Get-DesktopEnvironmentGroup $p.guest.desktop
+        }
+        New-KickstartDisk @ksSplat | Out-Null
 
         if ($p.install.installGuestTools) {
             Update-KickstartDisk -Path $ksPath -UserName $p.install.userName -InstallGuestTools

@@ -70,6 +70,12 @@ function New-KickstartDisk {
         [string]$Locale = 'en_NZ.UTF-8',
         # Public key to drop in, so the guest is reachable without the console.
         [string]$AuthorizedKey,
+        # A netinst image carries no packages, so it needs both an install
+        # source and a package selection. A Live image carries its own payload
+        # and ignores both -- pass -Live to leave them out.
+        [string]$PackageEnvironment = '@^workstation-product-environment',
+        [string]$ReleaseVersion = '44',
+        [switch]$Live,
         # The installer's own encryption is off by default: a LUKS passphrase
         # must be typed at the console on every boot, before any network
         # exists, which defeats the point of an unattended machine.
@@ -102,12 +108,25 @@ function New-KickstartDisk {
         $ks.Add('autopart --type=btrfs')
     }
     $ks.Add('bootloader --location=mbr')
+    if (-not $Live) {
+        # netinst has no payload: without a source Anaconda stops and asks for
+        # one, which is precisely the interaction we are removing. The
+        # mirrorlist resolves $releasever/$basearch on the installer side.
+        $ks.Add('url --mirrorlist="https://mirrors.fedoraproject.org/mirrorlist?repo=fedora-' + $ReleaseVersion + '&arch=x86_64"')
+    }
     # gnome-initial-setup would otherwise ask again for everything set above.
     $ks.Add('firstboot --disable')
     if ($AuthorizedKey) {
         $ks.Add("sshkey --username=$UserName `"$AuthorizedKey`"")
     }
     $ks.Add('reboot')
+
+    if (-not $Live -and $PackageEnvironment) {
+        $ks.Add('')
+        $ks.Add('%packages')
+        $ks.Add($PackageEnvironment)
+        $ks.Add('%end')
+    }
 
     if (Test-Path -LiteralPath $Path) {
         if (-not $Force) { throw "Kickstart disk already exists: $Path (pass -Force to replace it)" }
