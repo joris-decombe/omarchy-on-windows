@@ -189,3 +189,82 @@ function Add-KickstartDisk {
     Add-VMHardDiskDrive -VM $vm -Path $Path
     Write-Ok "Attached $Path to $VMName"
 }
+
+<#
+.SYNOPSIS
+    Add SSH access and guest tooling to an existing kickstart disk.
+
+.DESCRIPTION
+    Edits the ks.cfg in place rather than regenerating it, which matters
+    because the password hash is only ever held in memory -- rebuilding the
+    disk would mean prompting for the password again.
+
+    The %post block runs inside the installed system with networking up, so it
+    can reach the Fedora mirrors. It deliberately does not use --erroronfail: a
+    mirror hiccup should leave you with an installed machine to fix, not an
+    aborted install.
+#>
+function Update-KickstartDisk {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$UserName,
+        # Public key to authorise for that user, so the guest is reachable
+        # without ever touching the console.
+        [string]$AuthorizedKey,
+        # openssh-server plus the Hyper-V integration daemons, which is what
+        # lets the host report the guest's address.
+        [switch]$InstallGuestTools
+    )
+
+    if (-not (Test-Elevated)) {
+        throw 'Editing the kickstart disk needs an elevated PowerShell (Mount-VHD requires Administrator).'
+    }
+    if (-not (Test-Path -LiteralPath $Path)) { throw "No kickstart disk at $Path" }
+
+    $mounted = $null
+    try {
+        $mounted = Mount-VHD -Path $Path -Passthru -ErrorAction Stop | Get-Disk
+        $vol = Get-Partition -DiskNumber $mounted.Number | Get-Volume | Where-Object DriveLetter
+        if (-not $vol) { throw 'The kickstart disk has no readable volume.' }
+        $ksPath = "$($vol.DriveLetter):\ks.cfg"
+        if (-not (Test-Path -LiteralPath $ksPath)) { throw "No ks.cfg on $Path" }
+
+        $lines = [System.Collections.Generic.List[string]](Get-Content -LiteralPath $ksPath)
+
+        if ($AuthorizedKey -and -not ($lines -match '^sshkey ')) {
+            # Kickstart writes this into the user's authorized_keys for us.
+            $idx = $lines.FindIndex({ param($l) $l -eq 'reboot' })
+            $entry = "sshkey --username=$UserName `"$AuthorizedKey`""
+            if ($idx -ge 0) { $lines.Insert($idx, $entry) } else { $lines.Add($entry) }
+        }
+
+        if ($InstallGuestTools -and -not ($lines -match '^%post')) {
+            $lines.Add('')
+            $lines.Add('%post --log=/root/ks-post.log')
+            $lines.Add('# Runs in the installed system, with networking up.')
+            $lines.Add('# hyperv-daemons is what lets the Windows host see this guest''s address;')
+            $lines.Add('# sshd is how the machine is reachable without using the console at all.')
+            $lines.Add('dnf install -y hyperv-daemons openssh-server git')
+            $lines.Add('systemctl enable hypervkvpd.service hypervvssd.service sshd.service')
+            $lines.Add('%end')
+        }
+
+        $text = ($lines -join "`n") + "`n"
+        [IO.File]::WriteAllText($ksPath, $text, [Text.UTF8Encoding]::new($false))
+
+        Write-Ok "updated ks.cfg on $Path"
+        Write-Note 'Contents:'
+        # Never echo the credential line: this output lands in transcripts and
+        # scrollback, and a SHA-512 crypt hash is still worth attacking.
+        $lines | ForEach-Object {
+            if ($_ -match '--iscrypted') {
+                Write-Note '  user --name=... --iscrypted --password=<redacted>'
+            } else {
+                Write-Note "  $_"
+            }
+        }
+    } finally {
+        if ($mounted) { Dismount-VHD -Path $Path -ErrorAction SilentlyContinue }
+    }
+}

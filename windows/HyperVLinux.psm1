@@ -12,6 +12,7 @@ Export-ModuleMember -Function @(
     'New-KickstartDisk'
     'New-LinuxPasswordHash'
     'Add-KickstartDisk'
+    'Update-KickstartDisk'
     'Connect-LinuxVM'
     'Remove-LinuxVM'
     'Get-LinuxVMAddress'
