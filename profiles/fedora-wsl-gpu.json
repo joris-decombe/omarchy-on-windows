@@ -1,0 +1,9 @@
+{
+  "name": "fedora-wsl-gpu",
+  "description": "Fedora 44 in WSL for GPU-accelerated applications. No desktop: WSL has no DRM node, so a compositor cannot be served.",
+  "target": "wsl",
+  "wsl": {
+    "distroName": "FedoraLinux-44",
+    "gpuAdapter": "NVIDIA"
+  }
+}

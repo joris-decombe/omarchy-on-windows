@@ -1,0 +1,342 @@
+<#
+Setup profiles.
+
+By the time this project had grown a second target (WSL) and a third install
+mode (unattended), the interface was a dozen cmdlets with interlocking
+parameters, and the only person who could drive it was whoever had just read
+the source. A profile is the fix: one JSON file describes an entire setup, and
+one command applies it.
+
+The reproducibility is the real point rather than a side effect. Comparing
+desktops means building machines that differ in exactly one respect, and a file
+you can diff is the only honest way to promise that.
+
+Profiles are data, not scripts: they are validated against a known set of keys
+before anything runs, so a typo is an error message rather than a VM built
+subtly wrong.
+#>
+
+# Every key a profile may contain, with its default. Anything outside this set
+# is rejected -- a silently-ignored "proccessorCount" is worse than a refusal.
+function Get-LinuxProfileDefault {
+    [ordered]@{
+        name        = 'unnamed'
+        description = ''
+        # 'vm' builds a Hyper-V machine; 'wsl' configures a WSL distro. They
+        # are genuinely different targets, not two ways of doing one thing:
+        # only the VM can host a desktop, only WSL can reach the GPU.
+        target      = 'vm'
+
+        vm          = [ordered]@{
+            name           = 'Fedora'
+            isoPath        = ''
+            processorCount = 8
+            memoryGB       = 12
+            minMemoryGB    = 2
+            staticMemory   = $false
+            diskGB         = 100
+            switchName     = 'Default Switch'
+            secureBoot     = $false
+        }
+
+        install     = [ordered]@{
+            # Unattended installs need a kickstart disk and an installer that
+            # reads it. Fedora Live ISOs do not: they boot to a desktop and
+            # only start Anaconda when you click Install, so OEMDRV is never
+            # scanned at boot. Use a netinst/DVD image for hands-off installs.
+            unattended        = $false
+            userName          = ''
+            fullName          = ''
+            hostname          = ''
+            timezone          = 'Pacific/Auckland'
+            keyboardLayout    = 'us'
+            locale            = 'en_NZ.UTF-8'
+            authorizedKeyPath = ''
+            installGuestTools = $true
+        }
+
+        guest       = [ordered]@{
+            desktop = 'gnome'
+            rdpPort = 3389
+        }
+
+        wsl         = [ordered]@{
+            distroName = 'FedoraLinux-44'
+            gpuAdapter = 'NVIDIA'
+        }
+    }
+}
+
+function ConvertTo-Hashtable {
+    param($InputObject)
+    if ($null -eq $InputObject) { return $null }
+    if ($InputObject -is [System.Management.Automation.PSCustomObject]) {
+        $h = [ordered]@{}
+        foreach ($p in $InputObject.PSObject.Properties) { $h[$p.Name] = ConvertTo-Hashtable $p.Value }
+        return $h
+    }
+    return $InputObject
+}
+
+<#
+.SYNOPSIS
+    Read and validate a profile, filling in defaults for anything omitted.
+#>
+function Get-LinuxProfile {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) { throw "No profile at $Path" }
+
+    try {
+        $raw = ConvertTo-Hashtable (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
+    } catch {
+        throw "Profile is not valid JSON: $Path`n$($_.Exception.Message)"
+    }
+
+    $merged = Get-LinuxProfileDefault
+    $problems = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($key in $raw.Keys) {
+        if (-not $merged.Contains($key)) { $problems.Add("unknown key '$key'"); continue }
+        if ($merged[$key] -is [System.Collections.Specialized.OrderedDictionary]) {
+            foreach ($sub in $raw[$key].Keys) {
+                if (-not $merged[$key].Contains($sub)) { $problems.Add("unknown key '$key.$sub'"); continue }
+                $merged[$key][$sub] = $raw[$key][$sub]
+            }
+        } else {
+            $merged[$key] = $raw[$key]
+        }
+    }
+
+    if ($merged.target -notin @('vm', 'wsl')) { $problems.Add("target must be 'vm' or 'wsl', got '$($merged.target)'") }
+
+    if ($merged.target -eq 'vm') {
+        if (-not $merged.vm.isoPath) { $problems.Add('vm.isoPath is required for a vm profile') }
+        elseif (-not (Test-Path -LiteralPath $merged.vm.isoPath)) { $problems.Add("vm.isoPath not found: $($merged.vm.isoPath)") }
+
+        if ($merged.install.unattended) {
+            foreach ($f in 'userName') {
+                if (-not $merged.install.$f) { $problems.Add("install.$f is required when install.unattended is true") }
+            }
+            if ($merged.vm.isoPath -match 'Live') {
+                $problems.Add('install.unattended with a Live ISO will not work: Live media boots to a desktop and never starts Anaconda, so the OEMDRV kickstart is never read. Use a netinst or DVD image.')
+            }
+        }
+    }
+
+    if ($merged.guest.desktop -notin @('gnome', 'kde', 'xfce', 'cinnamon', 'mate')) {
+        $problems.Add("guest.desktop '$($merged.guest.desktop)' is not one of: gnome kde xfce cinnamon mate")
+    }
+
+    if ($problems.Count) {
+        throw ("Profile $Path has problems:`n" + (($problems | ForEach-Object { "  - $_" }) -join "`n"))
+    }
+
+    $merged
+}
+
+<#
+.SYNOPSIS
+    Write a profile, asking questions when run with -Interactive.
+
+.EXAMPLE
+    New-LinuxProfile -Interactive -Path profiles/fedora-gnome.json
+#>
+function New-LinuxProfile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$Interactive,
+        [hashtable]$Settings,
+        [switch]$Force
+    )
+
+    if ((Test-Path -LiteralPath $Path) -and -not $Force) {
+        throw "Profile already exists: $Path (pass -Force to overwrite)"
+    }
+
+    $p = Get-LinuxProfileDefault
+
+    if ($Interactive) {
+        Write-Step 'New setup profile'
+        Write-Note 'Enter accepts the default in brackets.'
+
+        $p.name = Read-Default 'Profile name' ([IO.Path]::GetFileNameWithoutExtension($Path))
+        $p.description = Read-Default 'Description' ''
+        $p.target = Read-Choice 'Target' @('vm', 'wsl') $p.target
+
+        if ($p.target -eq 'vm') {
+            $p.vm.name = Read-Default 'VM name' $p.name
+            $p.vm.isoPath = Read-Iso
+            $p.vm.switchName = Read-Choice 'Virtual switch' @(Get-VMSwitch | Select-Object -ExpandProperty Name) $p.vm.switchName
+            $p.vm.processorCount = [int](Read-Default 'vCPUs' $p.vm.processorCount)
+            $p.vm.memoryGB = [int](Read-Default 'Max memory (GB)' $p.vm.memoryGB)
+            $p.vm.diskGB = [int](Read-Default 'Disk (GB)' $p.vm.diskGB)
+            $p.vm.secureBoot = (Read-Default 'Secure Boot? (y/n)' $(if ($p.vm.secureBoot) { 'y' } else { 'n' })) -eq 'y'
+
+            $p.guest.desktop = Read-Choice 'Desktop' @('gnome', 'kde', 'xfce', 'cinnamon', 'mate') $p.guest.desktop
+            if ($p.guest.desktop -ne 'gnome') {
+                Write-Warn 'Only GNOME gives a session sized by the connecting client; the others cannot resize with the window.'
+            }
+
+            $p.install.unattended = (Read-Default 'Unattended install? (y/n)' 'n') -eq 'y'
+            if ($p.install.unattended) {
+                if ($p.vm.isoPath -match 'Live') {
+                    Write-Warn 'That is a Live ISO. Unattended installs need a netinst or DVD image -- Live media never starts Anaconda at boot, so the kickstart is not read.'
+                }
+                $p.install.userName = Read-Default 'Linux username' $env:USERNAME.ToLower()
+                $p.install.fullName = Read-Default 'Full name' $p.install.userName
+                $p.install.hostname = Read-Default 'Hostname' $p.vm.name.ToLower()
+                $p.install.timezone = Read-Default 'Timezone' $p.install.timezone
+                $p.install.keyboardLayout = Read-Default 'Keyboard layout' $p.install.keyboardLayout
+                $p.install.locale = Read-Default 'Locale' $p.install.locale
+                $p.install.authorizedKeyPath = Read-Default 'SSH public key to authorise (blank for none)' "$env:USERPROFILE\.ssh\linux-on-hyperv.pub"
+            }
+        } else {
+            $distros = @(((& wsl.exe --list --quiet 2>$null) -join "`n") -replace "`0", '' -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($distros) { $p.wsl.distroName = Read-Choice 'WSL distro' $distros $p.wsl.distroName }
+            $p.wsl.gpuAdapter = Read-Default 'Preferred GPU adapter (matched by name)' $p.wsl.gpuAdapter
+        }
+    }
+
+    if ($Settings) {
+        foreach ($k in $Settings.Keys) {
+            if (-not $p.Contains($k)) { throw "unknown setting '$k'" }
+            $p[$k] = $Settings[$k]
+        }
+    }
+
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
+    ($p | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $Path -Encoding UTF8
+    Write-Ok "wrote $Path"
+
+    # Validate what was just written, so a bad answer surfaces now rather than
+    # halfway through building a VM.
+    Get-LinuxProfile -Path $Path | Out-Null
+    Write-Ok 'profile is valid'
+    $Path
+}
+
+function Read-Default {
+    param([string]$Prompt, $Default)
+    $answer = Read-Host "  $Prompt [$Default]"
+    if ([string]::IsNullOrWhiteSpace($answer)) { return $Default }
+    $answer.Trim()
+}
+
+function Read-Choice {
+    param([string]$Prompt, [string[]]$Options, [string]$Default)
+    Write-Host "  $Prompt" -ForegroundColor White
+    for ($i = 0; $i -lt $Options.Count; $i++) {
+        $mark = if ($Options[$i] -eq $Default) { '*' } else { ' ' }
+        Write-Host ("    $mark {0}) {1}" -f ($i + 1), $Options[$i])
+    }
+    $answer = Read-Host "  choose 1-$($Options.Count) [$Default]"
+    if ([string]::IsNullOrWhiteSpace($answer)) { return $Default }
+    if ($answer -match '^\d+$' -and [int]$answer -ge 1 -and [int]$answer -le $Options.Count) {
+        return $Options[[int]$answer - 1]
+    }
+    if ($Options -contains $answer) { return $answer }
+    Write-Warn "not one of the options; keeping $Default"
+    $Default
+}
+
+# Offer whatever ISOs are lying around rather than making someone type a path.
+function Read-Iso {
+    $candidates = @(
+        "$env:USERPROFILE\Downloads", 'D:\Downloads', 'D:\iso', 'C:\iso'
+    ) | Where-Object { Test-Path $_ } | ForEach-Object {
+        Get-ChildItem -LiteralPath $_ -Filter *.iso -File -ErrorAction SilentlyContinue
+    } | Sort-Object LastWriteTime -Descending | Select-Object -First 8
+
+    if (-not $candidates) { return (Read-Default 'Installer ISO path' '') }
+
+    Write-Host '  Installer ISO' -ForegroundColor White
+    for ($i = 0; $i -lt $candidates.Count; $i++) {
+        Write-Host ("    {0}) {1}  ({2:N1} GB)" -f ($i + 1), $candidates[$i].Name, ($candidates[$i].Length / 1GB))
+    }
+    $answer = Read-Host "  choose 1-$($candidates.Count), or type a path"
+    if ($answer -match '^\d+$' -and [int]$answer -ge 1 -and [int]$answer -le $candidates.Count) {
+        return $candidates[[int]$answer - 1].FullName
+    }
+    $answer.Trim()
+}
+
+<#
+.SYNOPSIS
+    Apply a profile: build the VM, or configure the WSL distro.
+
+.EXAMPLE
+    Invoke-LinuxProfile -Path profiles/fedora-gnome.json
+#>
+function Invoke-LinuxProfile {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$Force
+    )
+
+    $p = Get-LinuxProfile -Path $Path
+    Write-Step "Applying profile '$($p.name)' (target: $($p.target))"
+    if ($p.description) { Write-Note $p.description }
+
+    if ($p.target -eq 'wsl') {
+        Write-Note "WSL setup runs inside the distro. From '$($p.wsl.distroName)':"
+        Write-Note "  sudo bash wsl/setup.sh --adapter $($p.wsl.gpuAdapter)"
+        return
+    }
+
+    $splat = @{
+        Name           = $p.vm.name
+        IsoPath        = $p.vm.isoPath
+        ProcessorCount = $p.vm.processorCount
+        MemoryBytes    = [uint64]$p.vm.memoryGB * 1GB
+        DiskBytes      = [uint64]$p.vm.diskGB * 1GB
+        SwitchName     = $p.vm.switchName
+        NoStart        = $true
+    }
+    if ($p.vm.secureBoot) { $splat.SecureBoot = $true }
+    if ($p.vm.staticMemory) { $splat.StaticMemory = $true }
+    $splat.MinimumMemoryBytes = [uint64]$p.vm.minMemoryGB * 1GB
+    if ($Force) { $splat.Force = $true }
+
+    if (-not $PSCmdlet.ShouldProcess($p.vm.name, "Create VM from profile $($p.name)")) { return }
+
+    New-LinuxVM @splat | Out-Null
+
+    if ($p.install.unattended) {
+        $key = ''
+        if ($p.install.authorizedKeyPath -and (Test-Path -LiteralPath $p.install.authorizedKeyPath)) {
+            $key = (Get-Content -LiteralPath $p.install.authorizedKeyPath -Raw).Trim()
+        }
+        Write-Host ''
+        Write-Host "Password for the Linux user '$($p.install.userName)':" -ForegroundColor Cyan
+        $hash = New-LinuxPasswordHash
+
+        $vmDir = Split-Path -Parent (Get-VMHardDiskDrive -VMName $p.vm.name | Select-Object -First 1 -ExpandProperty Path)
+        $ksPath = Join-Path $vmDir "$($p.vm.name)-kickstart.vhdx"
+
+        New-KickstartDisk -Path $ksPath -UserName $p.install.userName `
+            -FullName $p.install.fullName -Hostname $p.install.hostname `
+            -PasswordHash $hash -Timezone $p.install.timezone `
+            -KeyboardLayout $p.install.keyboardLayout -Locale $p.install.locale `
+            -AuthorizedKey $key -Force | Out-Null
+
+        if ($p.install.installGuestTools) {
+            Update-KickstartDisk -Path $ksPath -UserName $p.install.userName -InstallGuestTools
+        }
+        Add-KickstartDisk -VMName $p.vm.name -Path $ksPath
+
+        # Anaconda has to run for the kickstart to be read, so boot the ISO.
+        Set-VMFirmware -VMName $p.vm.name -FirstBootDevice (Get-VMDvdDrive -VMName $p.vm.name | Select-Object -First 1)
+    }
+
+    Start-VM -Name $p.vm.name -ErrorAction Continue
+    if ((Get-VM -Name $p.vm.name).State -ne 'Running') {
+        throw "The VM did not start. Free memory is the usual cause; see docs/troubleshooting.md."
+    }
+    Write-Ok "'$($p.vm.name)' is running"
+    Write-Note "Next, in the guest:  sudo bash guest/setup.sh --desktop $($p.guest.desktop)"
+    Write-Note "Then here:           Start-LinuxDesktop -Name $($p.vm.name)"
+}

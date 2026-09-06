@@ -78,6 +78,39 @@ Add-LocalGroupMember -Group 'Hyper-V Administrators' -Member $env:USERNAME
 
 Then sign out and back in — group membership only applies to a new logon token.
 
+## Profiles
+
+One JSON file describes a whole setup; one command applies it.
+
+```powershell
+Import-Module .\windows\HyperVLinux.psd1
+New-LinuxProfile -Interactive -Path profiles\my-setup.json   # asks, then writes
+Invoke-LinuxProfile -Path profiles\my-setup.json             # builds it
+```
+
+The wizard offers what your machine actually has -- the ISOs in your Downloads,
+your virtual switches, your installed WSL distros -- rather than making you
+type paths.
+
+Reproducibility is the point rather than a nicety: comparing desktops means
+building machines that differ in exactly one respect, and a file you can diff
+is the only honest way to promise that. Keep one profile per candidate.
+
+Profiles are validated before anything runs, against a known set of keys, so a
+typo is an error rather than a VM built subtly wrong:
+
+```
+Profile my-setup.json has problems:
+  - unknown key 'vm.proccessorCount'
+  - install.unattended with a Live ISO will not work: Live media boots to a
+    desktop and never starts Anaconda, so the OEMDRV kickstart is never read.
+    Use a netinst or DVD image.
+  - guest.desktop 'hyprland' is not one of: gnome kde xfce cinnamon mate
+```
+
+Two shipped examples: [`profiles/fedora-gnome-vm.json`](profiles/fedora-gnome-vm.json)
+and [`profiles/fedora-wsl-gpu.json`](profiles/fedora-wsl-gpu.json).
+
 ## Install
 
 ### 1. Create the VM
@@ -157,6 +190,9 @@ password — Remote Login has no separate RDP credentials.
 | Command | What it does |
 |---|---|
 | `Test-HyperVHost` | Preflight only: access, Hyper-V, switch, ISO, disk space |
+| `New-LinuxProfile` | Write a setup profile, interactively or from values |
+| `Invoke-LinuxProfile` | Build a setup from a profile |
+| `Get-LinuxProfile` | Read and validate a profile |
 | `New-LinuxVM` | Create and start the VM |
 | `New-KickstartDisk` | Build an OEMDRV disk for an unattended install |
 | `New-LinuxPasswordHash` | Hash a password locally for Kickstart |

@@ -1,0 +1,26 @@
+{
+  "name": "fedora-gnome-vm",
+  "description": "Fedora 44 + GNOME in a Hyper-V VM, reached over RDP. Software rendered; the reference desktop.",
+  "target": "vm",
+  "vm": {
+    "name": "Fedora",
+    "isoPath": "D:\\Downloads\\Fedora-Workstation-Live-44-1.7.x86_64.iso",
+    "processorCount": 8,
+    "memoryGB": 12,
+    "minMemoryGB": 2,
+    "staticMemory": false,
+    "diskGB": 100,
+    "switchName": "HA-External",
+    "secureBoot": true
+  },
+  "install": {
+    "unattended": false,
+    "userName": "joris",
+    "hostname": "fedora",
+    "installGuestTools": true
+  },
+  "guest": {
+    "desktop": "gnome",
+    "rdpPort": 3389
+  }
+}
